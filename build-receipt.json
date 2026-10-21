@@ -4,14 +4,14 @@
   "files": [
     {
       "name": "fgv-runtime.mjs",
-      "url": "https://raw.githubusercontent.com/JHB-1/function-graph-visualizer-web/6425b8b0a82f8ba5e72f7b385466d957f03a1e0c/runtime/fgv-runtime.mjs",
+      "url": "https://raw.githubusercontent.com/JHB-1/function-graph-visualizer-web/e942335af17c998013b0d6dee5f4e6da32134d7e/runtime/fgv-runtime.mjs",
       "sha256": "def5b81b708a61cca3e3f05b13800cf874e710f03c351453f29b22493b321afe"
     },
     {
       "name": "fgv-runtime.wasm",
-      "url": "https://raw.githubusercontent.com/JHB-1/function-graph-visualizer-web/6425b8b0a82f8ba5e72f7b385466d957f03a1e0c/runtime/fgv-runtime.wasm",
+      "url": "https://raw.githubusercontent.com/JHB-1/function-graph-visualizer-web/e942335af17c998013b0d6dee5f4e6da32134d7e/runtime/fgv-runtime.wasm",
       "sha256": "1fc8a80f3bf983e43ff945dc025e12977e5c8beee4974404efe3107794a0634f"
     }
   ],
-  "web_commit": "5c77a817daa346ff0e3be997e7be124256d72da5"
+  "web_commit": "2d168c23e9229701e3413737646a99ac2d35bb1e"
 }
