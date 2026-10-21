@@ -14,5 +14,7 @@ int main()
 		catch (const std::exception& error)
 		{
 			std::cout << nlohmann::json({ { "native_error", error.what() } }).dump() << '\n';
+
+			return 1;
 		}
 }

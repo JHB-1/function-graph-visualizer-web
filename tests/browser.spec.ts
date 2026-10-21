@@ -5,11 +5,11 @@ async function ready(page: Page): Promise<void>
 	await expect(page.locator("#status")).toContainText("정점", { timeout: 45000 });
 	await expect(page.locator("#error")).toBeEmpty();
 }
-test('every preset renders, full-screen resize and categories', async ({ page }): Promise<void> =>
+test('every preset renders, full-screen resize and categories', async ({ page }: { page: Page }): Promise<void> =>
 {
 	const errors: string[] = [];
 	page.on("pageerror", (error: Error): void => { errors.push(error.message); });
-	await page.goto('/');
+	await page.goto('./');
 	await ready(page);
 	for (let index: number = 0; index < 9; ++index)
 	{
@@ -32,9 +32,9 @@ test('every preset renders, full-screen resize and categories', async ({ page })
 	await page.screenshot({ path: 'test-results/full-screen.png' });
 	expect(errors).toEqual([]);
 });
-test('rotation, pan, wheel, theme and invalid document preserve the graph', async ({ page }): Promise<void> =>
+test('rotation, pan, wheel, theme and invalid document preserve the graph', async ({ page }: { page: Page }): Promise<void> =>
 {
-	await page.goto('/');
+	await page.goto('./');
 	await ready(page);
 	const before: string | null = await page.locator('#graph').getAttribute('data-frames');
 	await page.mouse.move(1000, 420);
