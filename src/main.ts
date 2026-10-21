@@ -133,6 +133,11 @@ function require_idle(): void
 		throw new Error("조작·계산·출력이 끝난 뒤 다시 시도하세요.");
 }
 
+async function confirm_action(message: string): Promise<boolean>
+{
+	return host?.confirm ? host.confirm(message) : confirm(message);
+}
+
 function reset_navigation(): void
 {
 	view_log = state ? [structuredClone(state)] : [];
@@ -262,8 +267,10 @@ async function replace_document(candidate: DocumentValue, name: string): Promise
 	try { require_idle(); }
 	catch (error: unknown) { error_text(error); return false; }
 
-	if (dirty() && !confirm("저장하지 않은 변경 사항을 버리고 문서를 교체할까요?"))
+	if (dirty() && !await confirm_action("저장하지 않은 변경 사항을 버리고 문서를 교체할까요?"))
 		return false;
+
+	require_idle();
 
 	if (!await render(candidate, true))
 		return false;
@@ -1073,7 +1080,7 @@ function panel(): void
 		};
 		button("로컬 기록 지우기", async (): Promise<void> =>
 		{
-			if (confirm("FGV의 모든 탭에서 저장한 로컬 기록을 지울까요?"))
+			if (await confirm_action("FGV의 모든 탭에서 저장한 로컬 기록을 지울까요?"))
 				await clear_local_record(true);
 		});
 		const options_heading: HTMLHeadingElement = document.createElement("h3");
@@ -1552,7 +1559,7 @@ element("recover").onclick = (): void =>
 	const candidate: RecoveryRecord = recovery;
 	void (async (): Promise<void> =>
 	{
-		if (dirty() && !confirm("저장하지 않은 변경 사항을 버리고 이전 작업을 복구할까요?"))
+		if (dirty() && !await confirm_action("저장하지 않은 변경 사항을 버리고 이전 작업을 복구할까요?"))
 			return;
 
 		if (!await render(candidate.document, true))
@@ -1663,7 +1670,7 @@ function dispose_workspace(): void
 	plot.dispose();
 }
 
-function apply_external_document(): void
+async function apply_external_document(): Promise<void>
 {
 	if (disposed || !external_document)
 		return;
@@ -1675,14 +1682,17 @@ function apply_external_document(): void
 		return;
 	}
 
-	if (pending_fields && !confirm("서버의 새 그래프로 편집 중인 입력을 바꿀까요?"))
+	const candidate: DocumentValue = external_document;
+	if (pending_fields && !await confirm_action("서버의 새 그래프로 편집 중인 입력을 바꿀까요?"))
 	{
 		element("host-status").textContent = "서버에 새 변경 사항이 있습니다. 진단의 서버 새로고침으로 불러오세요.";
 
 		return;
 	}
 
-	const candidate: DocumentValue = external_document;
+	if (external_document !== candidate || disposed)
+		return;
+
 	external_document = undefined;
 	reset_navigation();
 	void render(candidate, true);

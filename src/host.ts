@@ -22,6 +22,7 @@ export interface WorkspaceHost
 	dark: boolean;
 	request(input: ObjectValue, preview: boolean): Promise<ObjectValue>;
 	download(name: string, contents: Blob): Promise<void>;
+	confirm?(message: string): Promise<boolean>;
 	subscribe(listener: (event: WorkspaceEvent) => void): void;
 	actions: Array<{ id: string; label: string; run: () => Promise<void> }>;
 	info(): ObjectValue;

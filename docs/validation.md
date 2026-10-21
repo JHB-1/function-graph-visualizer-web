@@ -88,3 +88,10 @@ strict TypeScript/production build, 실제 WASM 12/12, Chrome production 회귀 
 기본 3D/회전/2D 종횡비 여백/넓은 화면 PNG를 직접 열어 시각적으로도 확인했습니다.
 ES 모듈과 WASM 요청 모두 고정 산출물 SHA의 같은 버전 쿼리를 사용합니다.
 기존 탭의 이전 런타임 캐시 재사용을 피하며 실제 브라우저 요청 URL에서도 두 버전의 일치를 검사합니다.
+# MCP 호스트 확인창 확장, 2026-10-21
+
+WorkspaceHost.confirm을 선택적으로 제공할 수 있습니다. MCP sandbox에서 브라우저 모달 권한 없이
+위젯 내부 확인창을 사용할 수 있으며 기본 웹/데스크톱은 기존 확인 절차를 유지합니다.
+호스트 확인 뒤 문서 교체의 유휴 상태를 다시 검사하며 대기 중 도착한 다른 서버 문서를 덮어쓰지 않습니다.
+Windows Chrome의 strict TypeScript/production build와 기존 실제 브라우저 15/15가 통과했습니다.
+
