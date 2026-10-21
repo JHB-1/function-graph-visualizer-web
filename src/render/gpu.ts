@@ -319,6 +319,7 @@ export class GpuPlot
 
 		this.clear();
 		this.data = data;
+		this.canvas.dataset.gridLines = String(data.rendering.grid_lines.length);
 		[this.buffer_width, this.buffer_height] = data.rendering.canvas_size;
 		this.renderer.setSize(this.buffer_width, this.buffer_height, false);
 		this.labels.width = this.buffer_width;

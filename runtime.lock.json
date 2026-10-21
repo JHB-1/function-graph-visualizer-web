@@ -1,16 +1,18 @@
 {
-  "core_commit": "3040d471ad647e190d04660de35a9297a3ebd85f",
+  "core_commit": "0f3c8ac7d655f8dba91a1ee754b1feeb0081c397",
   "emscripten": "4.0.23",
   "files": [
     {
       "name": "fgv-runtime.mjs",
-      "url": "https://raw.githubusercontent.com/JHB-1/function-graph-visualizer-web/e942335af17c998013b0d6dee5f4e6da32134d7e/runtime/fgv-runtime.mjs",
+      "url": "https://raw.githubusercontent.com/JHB-1/function-graph-visualizer-web/5bdced5cd3638050f931fa53366887f93cabf103/runtime/core-0f3c8ac/fgv-runtime.mjs",
       "sha256": "def5b81b708a61cca3e3f05b13800cf874e710f03c351453f29b22493b321afe"
     },
     {
       "name": "fgv-runtime.wasm",
-      "url": "https://raw.githubusercontent.com/JHB-1/function-graph-visualizer-web/e942335af17c998013b0d6dee5f4e6da32134d7e/runtime/fgv-runtime.wasm",
-      "sha256": "1fc8a80f3bf983e43ff945dc025e12977e5c8beee4974404efe3107794a0634f"
+      "url": "https://raw.githubusercontent.com/JHB-1/function-graph-visualizer-web/5bdced5cd3638050f931fa53366887f93cabf103/runtime/core-0f3c8ac/fgv-runtime.wasm",
+      "sha256": "7da4ac058c6ba3776e96669c0fe757ad6075efbea65b5b93eaabcc92b6ec2b1c"
     }
-  ]
+  ],
+  "build_platform": "windows-x64",
+  "emsdk_commit": "c0bb220cb6e6f4e0fabb6f6db9efd53390ef5e56"
 }

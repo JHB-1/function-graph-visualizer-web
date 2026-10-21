@@ -64,3 +64,25 @@ Ctrl/Cmd S/O/F와 도움말, 드래그 중 파일 출력/교체 거절도 실제
 불필요한 동일 크기 ResizeObserver 재계산이 조작 보호와 충돌하는 경로도 제거했습니다.
 
 최종 strict TypeScript/production build, 실제 WASM 10/10, Chrome 전체 회귀 13/13 통과입니다.
+
+## 화면 전체 격자/공통 3D 간격, 2026-10-21
+
+고정 core 0f3c8ac의 view/camera/viewport 프레임 API를 사용합니다.
+3D 자동 간격을 같은 월드 값으로 해석하고, 화면 밖 데이터 경계에서 격자 후보가 끊기지 않습니다.
+2D 종횡비 여백과 넓은 화면, 이동/확대/3D 회전 뒤 코어에서 후보를 다시 생성합니다.
+축별 명시 간격/원점 위상/원본 기하와 범위/축 길이를 유지하며 과밀 간격은 거절합니다.
+진단 JSON은 실제 grid_spacing/후보 수, 캔버스는 data-grid-lines를 보고합니다.
+PNG 배율 요청의 grid_pixel_scale은 같은 화면의 자동 월드 간격을 보존하며 1..3만 허용합니다.
+
+Windows MSVC 19.51 코어 CTest 8/8와 실제 네이티브 요청 12/12,
+설치 패키지의 외부 C++ 소비자 실행과 render_demo 빌드가 통과했습니다.
+Windows Emscripten 4.0.23/SDK c0bb220/CMake 4.4.3으로 직접 WASM을 빌드했습니다.
+Docker에 소스를 연결하지 않았고 SDK는 작업 폴더에만 설치했습니다.
+새 .mjs/.wasm에 절대 소스 경로가 없음을 확인하고 해시/빌드 출처를 runtime.lock.json에 기록했습니다.
+private 코어 소스는 공개하지 않으며 버전별 산출물 URL을 불변 Git SHA에 고정합니다.
+
+strict TypeScript/production build, 실제 WASM 12/12, Chrome production 회귀 15/15 통과입니다.
+실제 2D 픽셀 줄의 간격 오차 1px 이하와 양쪽 화면 끝까지의 채움을 검사했습니다.
+1440×900과 1920×600, 이동/휠/크기 변경과 3D 회전도 검사했습니다.
+휠 입력 병합 뒤 코어 동기화가 끝나는 실제 픽셀을 기다리며 입력 직후의 임시 카메라와 구별합니다.
+기본 3D/회전/2D 종횡비 여백/넓은 화면 PNG를 직접 열어 시각적으로도 확인했습니다.

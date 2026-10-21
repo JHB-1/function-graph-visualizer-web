@@ -507,7 +507,13 @@ namespace fgv_web
 			};
 		}
 
-		const fgv::plot_frame frame = fgv::make_plot_frame(scene, 1000);
+		// 초기 데이터 범위 계산에서 화면 밖의 명시 격자 후보 생성 제외
+		fgv::graph_scene bounds_scene;
+		bounds_scene.geometry.display_dimension = scene.geometry.display_dimension;
+		bounds_scene.geometry.bounds = scene.geometry.bounds;
+		bounds_scene.domain_bounds = scene.domain_bounds;
+		bounds_scene.presentation.display_range = scene.presentation.display_range;
+		fgv::plot_frame frame = fgv::make_plot_frame(bounds_scene, 1000);
 		const fgv::bounds3 bounds = frame.range;
 		fgv::view2d resolved_view { { bounds.lower.x, bounds.lower.y }, { bounds.upper.x, bounds.upper.y }, false };
 		if (use_view) resolved_view = *scene.presentation.view;
@@ -570,6 +576,19 @@ namespace fgv_web
 			render_camera.orthographic_height = (resolved_view.upper.y - resolved_view.lower.y) * area.height / (low.y - high.y);
 		}
 
+		// 실제 카메라/화면으로 격자 위치 갱신, 원본 범위/축 길이/함수 샘플 유지
+		const double grid_pixel_scale = input.value("grid_pixel_scale", 1.0);
+		if (not std::isfinite(grid_pixel_scale) or grid_pixel_scale < 1 or 3 < grid_pixel_scale)
+			throw std::invalid_argument("grid_pixel_scale must be within 1..3");
+
+		const fgv::viewport grid_area
+		{
+			area.x / grid_pixel_scale, area.y / grid_pixel_scale,
+			area.width / grid_pixel_scale, area.height / grid_pixel_scale
+		};
+		frame = scene.geometry.display_dimension == 2 ? fgv::make_plot_frame(scene, resolved_view, area, 1000) :
+			fgv::make_plot_frame(scene, resolved_camera, grid_area, 1000);
+
 		const auto project_point = [&scene, &resolved_view, &resolved_camera, &area](fgv::point3 p) -> json
 		{
 			if (scene.geometry.display_dimension == 2)
@@ -620,6 +639,7 @@ namespace fgv_web
 			{ "dimension", scene.geometry.display_dimension },
 			{ "style", style },
 			{ "range", encode(frame.range) },
+			{ "grid_spacing", frame.grid_spacing },
 			{ "bounds", scene.geometry.bounds ? encode(*scene.geometry.bounds) : json(nullptr) },
 			{ "view",
 			  { { "lower", { resolved_view.lower.x, resolved_view.lower.y } },

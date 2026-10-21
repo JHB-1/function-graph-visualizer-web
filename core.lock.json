@@ -1,1 +1,6 @@
-{"repository":"JHB-1/function-graph-visualizer-core","commit":"3040d471ad647e190d04660de35a9297a3ebd85f","version":"0.7.0","bridge_version":1}
+{
+  "repository": "JHB-1/function-graph-visualizer-core",
+  "commit": "0f3c8ac7d655f8dba91a1ee754b1feeb0081c397",
+  "version": "0.7.0",
+  "bridge_version": 1
+}

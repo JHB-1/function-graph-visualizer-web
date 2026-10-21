@@ -16,6 +16,48 @@ function scene(spec, history = [], extra = {})
 }
 const base = { kind: 'dataset', dimension_count: 3, rows: [[0, 1, 2], [1, 3, 4], [2, 5, 6]], columns: [0, 1], plot: 'curve' };
 
+test('viewport grid keeps uniform steps beyond data, including aspect padding and distant pan', () =>
+{
+	const spec = { ...base, rows: [[-1, -1, 0], [1, 1, 0]], presentation: { overrides: {
+		view: { lower: [-1, -1], upper: [1, 1], preserve_aspect: true }, grid_spacing: [0.5, 0.5, null] } } };
+	const value = scene(spec, [], { canvas_size: [1200, 400] });
+	assert.deepEqual(value.grid_spacing.slice(0, 2), [0.5, 0.5]);
+	assert.deepEqual(value.bounds, { lower: [-1, -1, 0], upper: [1, 1, 0] });
+	const x = value.rendering.grid_lines.filter((line) => line.direction[1] === 1).map((line) => line.origin[0]);
+	assert.equal(x[0], -3);
+	assert.equal(x.at(-1), 3);
+	assert.ok(x.length > 10);
+	for (let i = 1; i < x.length; ++i) assert.equal(x[i] - x[i - 1], 0.5);
+	const moved = scene({ ...spec, presentation: { overrides: { ...spec.presentation.overrides,
+		view: { lower: [99, 99], upper: [101, 101], preserve_aspect: true } } } }, [], { canvas_size: [1200, 400] });
+	assert.equal(moved.rendering.grid_lines[0].origin[0], 97);
+	assert.deepEqual(moved.vertices.map((v) => v.position), value.vertices.map((v) => v.position));
+});
+
+test('3D auto steps agree, visible planes extend past bounds, explicit steps stay exact', () =>
+{
+	const spec = { ...base, rows: [[-1, -1, -0.1], [1, 1, 0.1]], columns: [0, 1, 2],
+		presentation: { overrides: { camera: { eye: [10, 10, 10], target: [0, 0, 0], up: [0, 0, 1],
+			projection: 'orthographic', near_distance: 0.1, far_distance: 100,
+			orthographic_width: 20, orthographic_height: 10, fov_y: 0.75 } } } };
+	const value = scene(spec, [], { canvas_size: [800, 400] });
+	assert.equal(value.grid_spacing[0], value.grid_spacing[1]);
+	assert.equal(value.grid_spacing[1], value.grid_spacing[2]);
+	assert.ok(value.rendering.grid_lines.length > 40);
+	assert.ok(value.rendering.grid_lines.some((line) => line.origin.some((v) => Math.abs(v) > 2)));
+	assert.deepEqual(value.range, { lower: [-1, -1, -0.1], upper: [1, 1, 0.1] });
+	const exported = scene(spec, [], { canvas_size: [1600, 800], grid_pixel_scale: 2 });
+	assert.deepEqual(exported.grid_spacing, value.grid_spacing);
+	assert.deepEqual(exported.rendering.grid_lines, value.rendering.grid_lines);
+	assert.match(request({ spec, history: [], grid_pixel_scale: 0 }).native_error, /grid_pixel_scale/);
+	const explicit = scene({ ...spec, presentation: { overrides: { ...spec.presentation.overrides,
+		grid_spacing: [0.5, 2, 1] } } }, [], { canvas_size: [800, 400] });
+	assert.deepEqual(explicit.grid_spacing, [0.5, 2, 1]);
+	assert.deepEqual(explicit.vertices, value.vertices);
+	assert.match(request({ spec: { ...spec, presentation: { overrides: { ...spec.presentation.overrides,
+		grid_spacing: [0.000001, 2, 1] } } }, history: [], canvas_size: [800, 400] }).native_error, /limit|too many/);
+});
+
 test('ND projection, full viewport, raw and explicit document style', () =>
 {
 	const value = scene(base, [], { canvas_size: [1600, 900] });

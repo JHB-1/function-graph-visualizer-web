@@ -539,7 +539,7 @@ async function export_png(): Promise<void>
 	{
 		await document.fonts.ready;
 		const source: DocumentValue = structuredClone(document_value);
-		const input: ObjectValue = { ...source, canvas_size: [scaled_width, scaled_height] };
+		const input: ObjectValue = { ...source, canvas_size: [scaled_width, scaled_height], grid_pixel_scale: png_scale };
 		if (source.spec.kind === "function")
 			input.expression_ast = parse_expression(String(source.spec.expression), Number(source.spec.dimension_count));
 
@@ -1084,6 +1084,7 @@ function panel(): void
 		button("PNG 저장", export_png);
 		const info: HTMLPreElement = document.createElement("pre");
 		info.textContent = JSON.stringify({ version: "web 0.1.0 · core 0.7.0", range: output?.range, bounds: output?.bounds,
+			grid_spacing: output?.grid_spacing, grid_lines: scene?.rendering.grid_lines.length,
 			stats: output?.stats, sampling_axes: output?.sampling_axes, rendering: { canvas_size: scene?.rendering.canvas_size,
 				viewport: scene?.rendering.viewport, view_matrix: scene?.rendering.view_matrix,
 				projection_matrix: scene?.rendering.projection_matrix } }, null, 2);

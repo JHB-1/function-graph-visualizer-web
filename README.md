@@ -8,6 +8,10 @@ C++23 **fgv::core 0.7.0**를 WebAssembly로 실행하는 2D/3D 웹 렌더러입�
 왼쪽 드래그 이동, 오른쪽 드래그 3D 회전, 휠 확대·축소를 지원합니다.
 수학·집계·증분 변경·테마·투영은 C++ 코어가 계산하고 Three.js가 결과를 그립니다.
 
+격자는 현재 화면 전체를 채우며 이동/확대/회전/크기 변경 뒤 C++ 코어에서 다시 생성합니다.
+3D 자동 간격은 세 축에 같은 월드 값을 사용하고 축별 명시 간격/원본 데이터 범위는 유지합니다.
+원근 화면 간격은 깊이에 따라 달라집니다. 진단 탭에서 실제 격자 간격/후보 수를 확인할 수 있습니다.
+
 | 저장소 | 역할 | 공개 범위 |
 |---|---|---|
 | function-graph-visualizer-core | 모델, 기하, 집계, 변환, 증분 캐시, 선택적 TCP/C ABI | private |
@@ -91,7 +95,8 @@ Boost.Asio 로컬/네트워크 TCP 및 C ABI는 private 코어/네이티브 호�
 ## 코어에서 WASM 재빌드
 
 `core.lock.json`에 고정한 private 코어 체크아웃과 Emscripten 4.0.23,
-CMake 3.31.6, nlohmann_json 3.12.0을 사용합니다.
+CMake 3.31 이상, nlohmann_json 3.12.0을 사용합니다. Docker는 필수 의존성이 아닙니다.
+이번 런타임은 Windows Emscripten SDK 4.0.23/CMake 4.4.3으로 직접 빌드했습니다.
 
 ```sh
 emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release -DFGV_CORE_SOURCE=/path/to/core
