@@ -44,6 +44,12 @@ namespace fgv_web
 
 	fgv::color color(const json& value)
 	{
+		if (not value.is_array() or value.size() != 4) throw std::invalid_argument("RGBA requires four integer channels");
+
+		for (const json& channel : value)
+			if (not channel.is_number_unsigned() or 255 < channel.get<std::size_t>())
+				throw std::invalid_argument("RGBA channels must be integers within 0..255");
+
 		return { value.at(0), value.at(1), value.at(2), value.at(3) };
 	}
 
@@ -56,6 +62,9 @@ namespace fgv_web
 
 	fgv::camera3d camera(const json& value)
 	{
+		if (value.contains("projection") and value.at("projection") != "orthographic" and value.at("projection") != "perspective")
+			throw std::invalid_argument("camera projection must be orthographic or perspective");
+
 		fgv::camera3d result;
 		if (value.contains("eye")) result.eye = point(value.at("eye"));
 		if (value.contains("target")) result.target = point(value.at("target"));

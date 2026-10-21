@@ -4,7 +4,7 @@
 nlohmann_json 3.12.0, Three.js 0.186.1, TypeScript 5.9.3, Vite 7.3.1
 
 - strict TypeScript와 production build 통과
-- Node에서 실제 WASM 테스트 8/8 통과
+- Node에서 실제 WASM 테스트 9/9 통과
 - Windows Chrome headless에서 전체 예제 9종과 카테고리, 화면 크기, 회전/이동/휠/테마,
   잘못된 문서 실패 시 이전 그래프 보존 테스트 2/2 통과
 - 1440×900과 1100×760에서 canvas/label/core viewport 크기 일치 확인

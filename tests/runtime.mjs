@@ -85,3 +85,14 @@ test('reject malformed rows, excessive AST, invalid canvas and sample limits', (
 
 	assert.ok(request({ spec: { kind: 'function', dimension_count: 1 }, history: [], expression_ast: ast }).native_error);
 });
+test('JSON integer boundaries, invalid enum and ambiguous histogram bins are rejected', () =>
+{
+	for (const spec of [{ ...base, dimension_count: 3.5 }, { ...base, columns: [0, 1.5] }, { ...base, plot: 'unknown' },
+		{ ...base, invalid_values: 'unknown' }, { ...base, presentation: { style: { stroke: [300, 0, 0, 255] } } }])
+		assert.ok(request({ spec, history: [] }).native_error);
+
+	assert.ok(request({ spec: base, history: [{ erase: [1.5] }] }).native_error);
+	assert.ok(request({ spec: base, history: [], canvas_size: [800.5, 600] }).native_error);
+	assert.ok(request({ spec: { ...base, kind: 'histogram', histogram: { mode: 'count', axes: [{ column: 0,
+		uniform: { lower: 0, upper: 2, step: 1 }, intervals: [] }] } }, history: [] }).native_error);
+});
