@@ -6,6 +6,9 @@ import { presets } from "./presets";
 import { parse_document, parse_recovery, read_recovery, store_recovery, document_limit,
 	type DocumentValue, type RecoveryRecord } from "./document";
 import "./style.css";
+import { get_workspace_host, storage_key, type WorkspaceEvent } from "./host";
+
+const host = get_workspace_host();
 
 const app: HTMLElement = document.querySelector("#app")!;
 app.innerHTML = `
@@ -40,6 +43,14 @@ rel="noopener noreferrer" aria-label="GitHub 저장소">↗</a></nav>
 <div id="error" role="alert"></div></main></div>
 <input id="document-picker" type="file" accept=".json,application/json" hidden>`;
 
+if (host)
+{
+	const notice: HTMLParagraphElement = document.createElement("p");
+	notice.id = "host-status";
+	notice.setAttribute("aria-live", "polite");
+	document.querySelector(".preset-row")!.append(notice);
+}
+
 function element<T extends HTMLElement>(id: string): T
 {
 	return document.getElementById(id) as T;
@@ -68,7 +79,7 @@ let exporting: boolean = false;
 let png_scale: number = 1;
 let png_transparent: boolean = false;
 let png_selection: boolean = false;
-let document_value: DocumentValue = { spec: structuredClone(presets[0]!.spec), history: [] };
+let document_value: DocumentValue = structuredClone(host?.initial_document ?? { spec: presets[0]!.spec, history: [] });
 let document_name: string = "새 문서";
 let baseline: string = JSON.stringify(document_value);
 let pending_fields: boolean = false;
@@ -84,7 +95,7 @@ interface Item { id: string; label: string; position?: number[]; screen?: number
 let items: Item[] = [];
 let item_query: string = "";
 let item_page: number = 0;
-let current_preset: string = "0";
+let current_preset: string = host ? "" : "0";
 let state: State | undefined;
 let output: ObjectValue | undefined;
 let scene: SceneData | undefined;
@@ -97,8 +108,12 @@ let sync_timer: ReturnType<typeof setTimeout> | undefined;
 let style_timer: ReturnType<typeof setTimeout> | undefined;
 let zoom_reference: State | undefined;
 const system_theme: MediaQueryList = matchMedia("(prefers-color-scheme: dark)");
-let dark: boolean = system_theme.matches;
+let dark: boolean = host?.dark ?? system_theme.matches;
 let manual_theme: boolean = false;
+let disposed: boolean = false;
+let animation_id: number = 0;
+let external_timer: ReturnType<typeof setTimeout> | undefined;
+let external_document: DocumentValue | undefined;
 
 function dirty(): boolean
 {
@@ -292,10 +307,11 @@ function configure_picker(input: HTMLInputElement): void
 	};
 }
 
-function export_document(): void
+async function export_document(): Promise<void>
 {
-	download("graph.fgv.json", JSON.stringify(document_value, null, 2));
-	baseline = JSON.stringify(document_value);
+	const exported: string = JSON.stringify(document_value);
+	await download("graph.fgv.json", JSON.stringify(document_value, null, 2));
+	baseline = exported;
 	document_status();
 }
 
@@ -366,7 +382,7 @@ function zoom_label(): void
 
 async function render(candidate: DocumentValue, rebuild: boolean = false, remember: boolean = true): Promise<boolean>
 {
-	if (exporting)
+	if (exporting || disposed)
 		return false;
 
 	const ticket: number = ++sequence;
@@ -404,9 +420,9 @@ async function render(candidate: DocumentValue, rebuild: boolean = false, rememb
 		items = next_items;
 		canvas.dataset.ready = "true";
 		canvas.dataset.dimension = String(next_scene.dimension);
-		canvas.dataset.revision = String(result.cache_revision);
+		canvas.dataset.revision = String(result.host_revision ?? result.cache_revision);
 		element("status").textContent = `${next_scene.dimension}D · ${next_scene.vertices.length.toLocaleString()} 정점 · ` +
-			`${next_scene.triangles.length.toLocaleString()} 면 · revision ${result.cache_revision}`;
+			`${next_scene.triangles.length.toLocaleString()} 면 · revision ${result.host_revision ?? result.cache_revision}`;
 		if (rebuild || tab === "items")
 			panel();
 		update_marker();
@@ -504,9 +520,12 @@ function selection(label: string, values: string[], selected: string): HTMLSelec
 
 	return select;
 }
-function download(name: string, value: string, type: string = "application/json"): void
+async function download(name: string, value: string, type: string = "application/json"): Promise<void>
 {
 	require_idle();
+	if (host)
+		return host.download(name, new Blob([value], { type }));
+
 	const url: string = URL.createObjectURL(new Blob([value], { type }));
 	const anchor: HTMLAnchorElement = document.createElement("a");
 	anchor.href = url;
@@ -543,7 +562,7 @@ async function export_png(): Promise<void>
 		if (source.spec.kind === "function")
 			input.expression_ast = parse_expression(String(source.spec.expression), Number(source.spec.dimension_count));
 
-		const result: ObjectValue = await core.request(input);
+		const result: ObjectValue = await core.request(input, true);
 		const geometry: SceneData = scene_schema.parse(result);
 		if (png_transparent)
 		{
@@ -586,10 +605,28 @@ async function export_png(): Promise<void>
 
 		context.drawImage(image_canvas, -left, -top);
 		context.drawImage(image_labels, -left, -top);
-		const anchor: HTMLAnchorElement = document.createElement("a");
-		anchor.download = "graph.png";
-		anchor.href = image.toDataURL();
-		anchor.click();
+		if (host)
+		{
+			const png: Blob = await new Promise
+			(
+				(resolve: (value: Blob) => void, reject: (error: Error) => void): void =>
+				{
+					image.toBlob((value: Blob | null): void =>
+					{
+						if (value) resolve(value);
+						else reject(new Error("PNG 생성 실패"));
+					});
+				},
+			);
+			await host.download("graph.png", png);
+		}
+		else
+		{
+			const anchor: HTMLAnchorElement = document.createElement("a");
+			anchor.download = "graph.png";
+			anchor.href = image.toDataURL();
+			anchor.click();
+		}
 	}
 	finally
 	{
@@ -622,15 +659,15 @@ function file_menu(): void
 	[
 		["이미지 파일로 출력 (.png)", export_png],
 		["그래프 문서로 출력 (.json)", export_document],
-		["raw 데이터로 출력 (.json)", (): void =>
+		["raw 데이터로 출력 (.json)", async (): Promise<void> =>
 		{
 			const raw: ObjectValue = structuredClone(document_value.spec);
 			for (const key of ["presentation", "dimensions", "output", "theme", "surface_rendering"])
 				delete raw[key];
 
-			download("graph.raw.json", JSON.stringify({ spec: raw, history: document_value.history }, null, 2));
+			await download("graph.raw.json", JSON.stringify({ spec: raw, history: document_value.history }, null, 2));
 		}],
-		["코어 결과로 출력 (.json)", (): void => download("scene.json", JSON.stringify(output, null, 2))],
+		["코어 결과로 출력 (.json)", (): Promise<void> => download("scene.json", JSON.stringify(output, null, 2))],
 	];
 	for (const [label, action] of choices)
 		menu.append(button(label, action));
@@ -995,6 +1032,12 @@ function panel(): void
 	else if (tab === "document")
 	{
 		heading("문서 · 테마", "raw 입력과 표시 정보를 포함한 문서를 모두 받습니다. .fgvtheme은 실제 코어가 읽고 정규화합니다. 명시 override는 프로파일 기본값보다 우선합니다.");
+		if (host?.recovery_note)
+		{
+			const note: HTMLParagraphElement = document.createElement("p");
+			note.textContent = host.recovery_note;
+			content.append(note);
+		}
 		button("새 문서", async (): Promise<void> =>
 		{
 			await replace_document({ spec: { kind: "dataset", dimension_count: 2, rows: [], columns: [0, 1], plot: "points" },
@@ -1007,10 +1050,14 @@ function panel(): void
 		configure_picker(file);
 		content.append(file);
 		const save = check("자동 저장", autosave);
-		save.onchange = (): void =>
+		save.onchange = async (): Promise<void> =>
 		{
 			autosave = save.checked;
-			try { sessionStorage.setItem("fgv-autosave", String(autosave)); }
+			try
+			{
+				if (host?.drafts) await host.drafts.set_enabled(autosave);
+				else sessionStorage.setItem(storage_key("autosave"), String(autosave));
+			}
 			catch (error: unknown) { error_text(error); }
 			if (autosave)
 				schedule_save();
@@ -1057,7 +1104,7 @@ function panel(): void
 		button("테마 저장", async (): Promise<void> =>
 		{
 			const result: ObjectValue = await core.request({ operation: "theme", text: theme_editor.value });
-			download("default.fgvtheme", String(result.text), "text/plain");
+			await download("default.fgvtheme", String(result.text), "text/plain");
 		});
 		upload("테마 파일 열기", ".fgvtheme", async (text: string): Promise<void> =>
 		{
@@ -1069,6 +1116,8 @@ function panel(): void
 	else
 	{
 		heading("코어 · 진단", "행렬·기하·집계·프레임은 C++23 코어에서 생성합니다. JavaScript는 입력 해석과 Three.js 렌더링을 담당합니다.");
+		for (const action of host?.actions ?? [])
+			button(action.label, action.run).id = action.id;
 		const transform = json_field("투영 / 역변환 / ray / 직선·선분 절단", {
 			world: [0, 0, 0], screen: [size()[0] / 2, size()[1] / 2], end: [1, 1, 1],
 			line: { origin: [0, 0, 0], direction: [1, 0, 0] },
@@ -1080,11 +1129,11 @@ function panel(): void
 				dimension: state?.dimension, view: state?.view, camera: state?.camera, viewport: scene?.rendering.viewport }), null, 2);
 		});
 		content.append(result);
-		button("코어 결과 JSON 저장", (): void => download("scene.json", JSON.stringify(output, null, 2)));
+		button("코어 결과 JSON 저장", (): Promise<void> => download("scene.json", JSON.stringify(output, null, 2)));
 		button("PNG 저장", export_png);
 		const info: HTMLPreElement = document.createElement("pre");
 		info.textContent = JSON.stringify({ version: "web 0.1.0 · core 0.7.0", range: output?.range, bounds: output?.bounds,
-			grid_spacing: output?.grid_spacing, grid_lines: scene?.rendering.grid_lines.length,
+			grid_spacing: output?.grid_spacing, grid_lines: scene?.rendering.grid_lines.length, host: host?.info(),
 			stats: output?.stats, sampling_axes: output?.sampling_axes, rendering: { canvas_size: scene?.rendering.canvas_size,
 				viewport: scene?.rendering.viewport, view_matrix: scene?.rendering.view_matrix,
 				projection_matrix: scene?.rendering.projection_matrix } }, null, 2);
@@ -1185,6 +1234,8 @@ for (const [index, entry] of presets.entries())
 	const option: HTMLOptionElement = document.createElement("option");
 	option.value = String(index); option.textContent = entry.name; preset.append(option);
 }
+
+preset.value = current_preset;
 
 preset.onchange = async (): Promise<void> =>
 {
@@ -1358,13 +1409,16 @@ canvas.addEventListener
 );
 function animate(): void
 {
+	if (disposed)
+		return;
+
 	if (changed)
 	{
 		plot.draw();
 		changed = false;
 	}
 
-	requestAnimationFrame(animate);
+	animation_id = requestAnimationFrame(animate);
 }
 
 function make_items(result: ObjectValue, geometry: SceneData, spec: ObjectValue): Item[]
@@ -1448,7 +1502,7 @@ async function initialize(): Promise<void>
 {
 	try
 	{
-		autosave = sessionStorage.getItem("fgv-autosave") !== "false";
+		autosave = host?.drafts ? await host.drafts.get_enabled() : sessionStorage.getItem(storage_key("autosave")) !== "false";
 		const stored: unknown = await read_recovery();
 		recovery_pending = autosave && stored !== undefined;
 		if (recovery_pending)
@@ -1516,7 +1570,7 @@ element("stage").addEventListener
 	},
 );
 animate();
-document.fonts.ready.then((): void => { plot.draw(); });
+document.fonts.ready.then((): void => { if (!disposed) plot.draw(); });
 document.addEventListener("keydown", (event: KeyboardEvent): void =>
 {
 	if ((event.ctrlKey || event.metaKey) && !event.altKey && ["KeyS", "KeyO", "KeyF"].includes(event.code))
@@ -1525,7 +1579,7 @@ document.addEventListener("keydown", (event: KeyboardEvent): void =>
 		try
 		{
 			if (event.code === "KeyS")
-				export_document();
+				void export_document().catch((error: unknown): void => error_text(error));
 			else if (event.code === "KeyO")
 			{
 				require_idle();
@@ -1553,6 +1607,9 @@ document.addEventListener("keydown", (event: KeyboardEvent): void =>
 let resize_timer: ReturnType<typeof setTimeout> | undefined;
 function resize_canvas(): void
 {
+	if (disposed)
+		return;
+
 	const [width, height] = size();
 	if (scene?.rendering.canvas_size[0] === width && scene.rendering.canvas_size[1] === height)
 		return;
@@ -1567,12 +1624,84 @@ function resize_canvas(): void
 	void render(document_value);
 }
 
-new ResizeObserver((): void =>
+const resize_observer: ResizeObserver = new ResizeObserver((): void =>
 {
 	clearTimeout(resize_timer);
 	resize_timer = setTimeout(resize_canvas, 160);
-}).observe(element("stage"));
-window.addEventListener("pagehide", (): void => { core.dispose(); plot.dispose(); });
+});
+resize_observer.observe(element("stage"));
+function dispose_workspace(): void
+{
+	if (disposed)
+		return;
+
+	disposed = true;
+	++sequence;
+	clearTimeout(save_timer);
+	clearTimeout(sync_timer);
+	clearTimeout(style_timer);
+	clearTimeout(resize_timer);
+	clearTimeout(external_timer);
+	cancelAnimationFrame(animation_id);
+	resize_observer.disconnect();
+	core.dispose();
+	plot.dispose();
+}
+
+function apply_external_document(): void
+{
+	if (disposed || !external_document)
+		return;
+
+	if (rendering || gesture || exporting || sync_timer !== undefined || style_timer !== undefined)
+	{
+		external_timer = setTimeout(apply_external_document, 100);
+
+		return;
+	}
+
+	if (pending_fields && !confirm("서버의 새 그래프로 편집 중인 입력을 바꿀까요?"))
+	{
+		element("host-status").textContent = "서버에 새 변경 사항이 있습니다. 진단의 서버 새로고침으로 불러오세요.";
+
+		return;
+	}
+
+	const candidate: DocumentValue = external_document;
+	external_document = undefined;
+	reset_navigation();
+	void render(candidate, true);
+}
+
+host?.subscribe
+(
+	(event: WorkspaceEvent): void =>
+	{
+		if (event.type === "teardown")
+			return dispose_workspace();
+
+		if (disposed)
+			return;
+
+		if (event.type === "document")
+		{
+			external_document = structuredClone(event.document);
+			apply_external_document();
+		}
+		else if (event.type === "theme" && !manual_theme)
+		{
+			dark = event.dark;
+			theme();
+		}
+		else if (event.type === "notice")
+		{
+			element("host-status").textContent = event.text;
+			if (event.error)
+				error_text(new Error(event.text));
+		}
+	},
+);
+window.addEventListener("pagehide", dispose_workspace);
 panel();
 configure_picker(element("document-picker"));
 void initialize();

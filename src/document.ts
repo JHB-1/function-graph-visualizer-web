@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { object, type ObjectValue } from "./engine/client";
+import { get_workspace_host, storage_key } from "./host";
 
 export interface DocumentValue { spec: ObjectValue; history: ObjectValue[] }
 export interface RecoveryRecord { version: 1; name: string; document: DocumentValue }
@@ -47,7 +48,7 @@ async function transact<T>(mode: IDBTransactionMode, make_request: (store: IDBOb
 	(
 		(resolve: (value: IDBDatabase) => void, reject: (error: Error) => void): void =>
 		{
-			const request: IDBOpenDBRequest = indexedDB.open("fgv-workspace", 1);
+			const request: IDBOpenDBRequest = indexedDB.open(get_workspace_host()?.storage_namespace ?? "fgv-workspace", 1);
 			let blocked: boolean = false;
 			request.onupgradeneeded = (): void => { request.result.createObjectStore("work"); };
 			request.onerror = (): void => reject(request.error ?? new Error("로컬 저장소 열기 실패"));
@@ -94,7 +95,7 @@ function claim_tab(): Promise<string>
 	if (tab_claim)
 		return tab_claim;
 
-	previous_tab = sessionStorage.getItem("fgv-draft-id");
+	previous_tab = sessionStorage.getItem(storage_key("draft-id"));
 	const acquire = (id: string): Promise<string> => new Promise
 	(
 		(resolve: (value: string) => void, reject: (error: Error) => void): void =>
@@ -108,7 +109,7 @@ function claim_tab(): Promise<string>
 
 			void navigator.locks.request
 			(
-				`fgv-draft:${id}`, { ifAvailable: true }, async (lock: Lock | null): Promise<void> =>
+				`${storage_key("draft")}:${id}`, { ifAvailable: true }, async (lock: Lock | null): Promise<void> =>
 				{
 					if (!lock)
 					{
@@ -130,7 +131,7 @@ function claim_tab(): Promise<string>
 	(
 		(id: string): string =>
 		{
-			sessionStorage.setItem("fgv-draft-id", id);
+			sessionStorage.setItem(storage_key("draft-id"), id);
 
 			return id;
 		},
@@ -141,6 +142,10 @@ function claim_tab(): Promise<string>
 
 export async function read_recovery(): Promise<unknown>
 {
+	const provider = get_workspace_host()?.drafts;
+	if (provider)
+		return provider.read();
+
 	const tab: string = await claim_tab();
 	const values: unknown[] = await transact("readonly", (store: IDBObjectStore): IDBRequest<unknown[]> => store.getAll());
 	const records = z.array(z.object({ tab: z.string(), updated_at: z.number().finite(), record: z.unknown() }).strict()).parse(values);
@@ -157,6 +162,15 @@ export function store_recovery(value: RecoveryRecord | undefined, all: boolean =
 	(
 		async (): Promise<void> =>
 		{
+			const provider = get_workspace_host()?.drafts;
+			if (provider)
+			{
+				if (value)
+					parse_recovery(value);
+
+				return provider.store(value, all);
+			}
+
 			const tab: string = await claim_tab();
 			if (all)
 				await transact("readwrite", (store: IDBObjectStore): IDBRequest<undefined> => store.clear());

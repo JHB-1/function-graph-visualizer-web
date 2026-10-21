@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./renderer": "./src/render/gpu.ts"
+    "./renderer": "./src/render/gpu.ts",
+    "./workspace": "./src/main.ts",
+    "./host": "./src/host.ts",
+    "./document": "./src/document.ts"
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",

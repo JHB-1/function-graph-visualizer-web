@@ -107,5 +107,10 @@ cmake --build build-wasm --parallel
 공통 JSON 브리지는 네이티브 CLI로도 빌드할 수 있으며 private 플러그인이 같은 소스를 사용합니다.
 기본 1000×700 패킷은 기존 MCP 뷰와 호환되고, 웹은 `canvas_size`로 화면 전체 뷰포트를 요청합니다.
 렌더러는 `@fgv/web/renderer`에서 재사용합니다. 코어 수학은 JavaScript로 다시 구현하지 않습니다.
+
+`@fgv/web/host`의 `set_workspace_host`를 먼저 설정하고 `@fgv/web/workspace`를 불러오면
+같은 UI를 MCP 등 다른 계산/파일 호스트에 연결할 수 있습니다. 호스트 미지정 시 기존 WASM 경로입니다.
+호스트는 선언 문서/계산 요청/다운로드/복구 저장소/외부 갱신/테마/정리 계약을 제공합니다.
+계산과 PNG 미리보기 요청을 구별하고, 실패한 후보가 현재 화면을 바꾸지 않도록 반환해야 합니다.
 프로젝트 자체 라이선스는 이 작업에서 새로 지정하지 않았습니다. 배포된 외부 라이브러리 고지는
 `THIRD_PARTY_NOTICES.txt`에 포함합니다.
