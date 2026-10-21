@@ -1,0 +1,17 @@
+{
+  "core_commit": "3040d47",
+  "emscripten": "4.0.23",
+  "files": [
+    {
+      "name": "fgv-runtime.mjs",
+      "url": "https://JHB-1.github.io/function-graph-visualizer-web/runtime/fgv-runtime.mjs",
+      "sha256": "98633d82873c3d7b3fb72846c152cb1b74d49387c1427ffdd77af8a10ef13838"
+    },
+    {
+      "name": "fgv-runtime.wasm",
+      "url": "https://JHB-1.github.io/function-graph-visualizer-web/runtime/fgv-runtime.wasm",
+      "sha256": "1218bf1a845c844596b34d8c9cfa752c2a1ca4050cd67d66ed9a83349a10d53b"
+    }
+  ],
+  "web_commit": "360d954a89ac07ffb6ea91d2932b64613a9b75dc"
+}
