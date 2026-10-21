@@ -589,7 +589,7 @@ export class GpuPlot
 		const padding: number = 3 * scale;
 		const occupied: Array<{ x: number; y: number; width: number; height: number }> = [];
 		ink.clearRect(0, 0, this.buffer_width, this.buffer_height);
-		ink.font = `${font_size}px system-ui`;
+		ink.font = `${font_size}px ${getComputedStyle(this.canvas).fontFamily || "system-ui"}`;
 		ink.textBaseline = "top";
 		ink.save();
 		ink.beginPath();

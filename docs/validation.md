@@ -15,3 +15,15 @@ nlohmann_json 3.12.0, Three.js 0.186.1, TypeScript 5.9.3, Vite 7.3.1
 웹 테스트는 프레임 도중 갱신을 검사하지만 별도 성능 벤치마크를 대체하지 않습니다.
 0.4.4 공통 렌더러의 30fps 검증 기록은 private plugin의 docs/surface-rendering.md를 참조합니다.
 모바일 실기기와 macOS 앱 패키지는 이 실행에서 확인하지 않았습니다.
+
+## GV 공통 작업 공간, 2026-10-21
+
+GV main 9a83a0b의 docs/workspace-ui.md와 src/workspace.css를 기준으로 동일한 셸/토큰을 적용했습니다.
+core/WASM 수학은 변경하지 않았습니다. desktop 56px/300px/나머지 캔버스와 모바일 48px/오버레이,
+ARIA 탭/키보드/Home/End/Escape, 접기/열기, 줌/맞춤, 파일 출력 메뉴를 검사했습니다.
+스타일은 90ms 입력 병합과 포커스/기하 보존, 오류 입력의 이전 유효 그래프 보존을 확인했습니다.
+Pretendard 실제 FontFace 로드, Canvas 라벨 font-family, JSON/수식 고정폭,
+폰트 준비 후 PNG 출력의 서명과 캔버스 크기를 검사했습니다.
+strict TypeScript/production build와 실제 브라우저 4/4, 기존 WASM 테스트 9/9 통과입니다.
+실제 데스크톱/모바일 크기 PNG를 열어 공통 셸과 그래프 표시를 확인했습니다.
+현재 Codex 인라인 위젯이나 private plugin/desktop 설치본을 이 변경으로 갱신하지 않았습니다.
