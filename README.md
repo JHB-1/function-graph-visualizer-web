@@ -1,0 +1,90 @@
+# Function Graph Visualizer Web
+
+[전체 화면 체험판](https://JHB-1.github.io/function-graph-visualizer-web/)
+
+C++23 **fgv::core 0.7.0**를 WebAssembly로 실행하는 2D/3D 웹 렌더러입니다.
+캔버스는 브라우저 화면 전체를 사용하고, 좌측 조작부를 접을 수 있습니다.
+왼쪽 드래그 이동, 오른쪽 드래그 3D 회전, 휠 확대·축소를 지원합니다.
+수학·집계·증분 변경·테마·투영은 C++ 코어가 계산하고 Three.js가 결과를 그립니다.
+
+| 저장소 | 역할 | 공개 범위 |
+|---|---|---|
+| function-graph-visualizer-core | 모델, 기하, 집계, 변환, 증분 캐시, 선택적 TCP/C ABI | private |
+| function-graph-visualizer-web | 공통 Three.js 렌더러, 코어 JSON 브리지, WASM, Pages | public |
+| function-graph-visualizer-plugin | 로컬 호스트, MCP, 스킬, 패키징 | private |
+| function-graph-visualizer-desktop | 웹 화면을 재사용하는 크로스 플랫폼 Electron 앱 | private |
+
+## 실행
+
+Node.js 24 이상이 필요합니다. 공개 배포물은 코어 소스 접근 권한 없이 사용할 수 있습니다.
+
+```sh
+npm ci
+npm run runtime
+npm run dev
+```
+
+`npm run runtime`은 `runtime.lock.json`의 공개 WASM/ES 모듈을 내려받아 SHA-256을 확인합니다.
+코어 소스나 인증 정보는 공개 저장소에 포함하지 않습니다. 입력 데이터는 브라우저 안에서 처리하며
+서버에 전송하지 않습니다. 최초 정적 자원 다운로드 후 수학 계산에 외부 서비스는 필요하지 않습니다.
+
+```sh
+npm run build
+node --test tests/runtime.mjs
+# dist를 http://127.0.0.1:8988 에 제공한 뒤
+npm test
+```
+
+## 기능
+
+| 카테고리 | 코어 기능 / 조작 |
+|---|---|
+| 입력 | ND 함수의 변화 축 1개/2개, 나머지 변수 고정, 입력 범위·샘플 수, reject/skip |
+| 입력 | ND 데이터의 2개/3개 열, 점, 입력 순서 곡선, 명시 경로, 빈 경로, 정규 격자 곡면 |
+| 입력 | 히스토그램 1개/2개 구간 축, count/sum/mean, 균등·직접 지정 구간, 상한 포함 여부 |
+| 축·범위 | 표시 범위, 무한 직선 격자, 축·격자 원점, 축 길이, 축 간격, 화살표, 이름·단위 |
+| 색상·크기 | 모든 성분 RGBA, 축별 RGBA, 선·점·축·화살표 크기, bar_gap |
+| 관찰 | 2D 뷰·종횡비, 3D 정투상/원근, eye/target/up/FOV/near/far, 초기 120도 등각 뷰 |
+| 증분·스트림 | append/replace/erase, 고정 행 ID, revision, 실제 코어 delta, NDJSON 배치 파일 |
+| 문서·테마 | raw / 표시 문서 JSON 열기·저장, .fgvtheme 검증·정규화·입출력, 명시 override |
+| 진단 | 기하·행렬·범위·통계, project/unproject/ray, 무한 직선·유한 선분 절단, JSON/PNG 저장 |
+| 표시 최적화 | 샘플 수와 U/V 표시선 분리, 선 배치, 보수적 화면 오차 LOD, 원본 기하 보존 |
+
+복합 설정은 각 탭의 JSON 편집기로 모든 필드를 노출합니다. 예제 9종으로 기본 입력을 선택할 수 있습니다.
+웹 JSON은 호스트의 교환 양식이며 새로운 코어 데이터 파일 표준을 의미하지 않습니다.
+함수는 제한 AST로만 해석합니다. `eval`, `Function`, 사용자 코드 컴파일은 사용하지 않습니다.
+`count` 집계에는 `value_column`을 생략하고, `sum`과 `mean`에는 지정합니다.
+
+브라우저의 임의 TCP 수신과 네이티브 DLL 호출은 플랫폼 제한으로 제공할 수 없습니다.
+Boost.Asio 로컬/네트워크 TCP 및 C ABI는 private 코어/네이티브 호스트의 기능이며,
+웹에서는 파일 스트림과 같은 증분 배치를 시험합니다. 이 차이를 소켓 기능 구현으로 보고하지 않습니다.
+
+## 제한과 소유권
+
+웹 호스트는 입력 8 MiB, ND 1..64열, 보유 10,000행/160,000스칼라,
+기하 후보 50,000정점/100,000선분/100,000삼각형, 히스토그램 1,000셀,
+격자 1,000후보, 이력 128배치, 캔버스 각 변 64..4096픽셀을 제한으로 둡니다.
+수식은 4096자/512노드/64중첩까지 허용합니다. 이는 코어 자체의 고정 한계가 아닌 웹 호스트의 설정입니다.
+실패한 후보는 표시 상태를 교체하지 않습니다. 파일 스트림은 앞서 성공한 배치를 유지하고 오류 줄에서 멈춥니다.
+세션을 닫으면 메모리는 사라지므로 후속 작업은 문서 저장으로 보관하세요.
+
+정적 페이지는 전체 문서 이력을 후보 캐시에 재현합니다. 각 배치의 실제 계산은 코어 증분 API를 사용하지만,
+브라우저 왕복 비용이 이력 길이에 따라 늘어납니다. 이 방식은 지속 캐시 서버의 처리량과 구별해야 합니다.
+증분 점·곡선과 고정 구간 히스토그램만 지원하며, 임의 경로/격자 곡면 변경은 새 문서를 만듭니다.
+
+## 코어에서 WASM 재빌드
+
+`core.lock.json`에 고정한 private 코어 체크아웃과 Emscripten 4.0.23,
+CMake 3.31.6, nlohmann_json 3.12.0을 사용합니다.
+
+```sh
+emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release -DFGV_CORE_SOURCE=/path/to/core
+cmake --build build-wasm --parallel
+# build-wasm/fgv-runtime.mjs, fgv-runtime.wasm을 public/runtime/에 복사
+```
+
+공통 JSON 브리지는 네이티브 CLI로도 빌드할 수 있으며 private 플러그인이 같은 소스를 사용합니다.
+기본 1000×700 패킷은 기존 MCP 뷰와 호환되고, 웹은 `canvas_size`로 화면 전체 뷰포트를 요청합니다.
+렌더러는 `@fgv/web/renderer`에서 재사용합니다. 코어 수학은 JavaScript로 다시 구현하지 않습니다.
+프로젝트 자체 라이선스는 이 작업에서 새로 지정하지 않았습니다. 배포된 외부 라이브러리 고지는
+`THIRD_PARTY_NOTICES.txt`에 포함합니다.

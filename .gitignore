@@ -1,0 +1,7 @@
+node_modules/
+dist/
+public/runtime/*
+!public/runtime/.gitkeep
+test-results/
+playwright-report/
+build*/

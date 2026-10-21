@@ -1,0 +1,717 @@
+import { z } from "zod";
+import { CoreClient, object, type ObjectValue } from "./engine/client";
+import { parse_expression } from "./engine/expression";
+import { GpuPlot, scene_schema, type SceneData, type ViewState } from "./render/gpu";
+import { presets } from "./presets";
+import "./style.css";
+
+const app: HTMLElement = document.querySelector("#app")!;
+app.innerHTML = `
+<main id="stage" aria-label="전체 화면 그래프"><canvas id="graph"></canvas><canvas id="labels"></canvas></main>
+<button id="open" aria-label="조작부 열기">☰ fgv</button>
+<aside id="sidebar" aria-label="그래프 조작부">
+<header><span class="logo">fgv</span><div class="brand">Function Graph Visualizer<small>C++23 CORE · WEBASSEMBLY</small></div>
+<button id="fold" aria-label="조작부 접기">‹</button></header>
+<div class="preset-row"><select id="preset" aria-label="예제 선택"></select></div>
+<nav aria-label="기능 카테고리"></nav><section id="content"></section>
+<footer><div class="row"><button id="apply" class="primary">변경 적용</button><button id="reset">뷰 초기화</button>
+<button id="theme" aria-label="라이트/다크 모드">◐</button></div><div id="status" role="status">C++ 코어를 준비하고 있습니다…</div>
+<div id="error" role="alert"></div></footer></aside>
+<div id="hud">왼쪽 드래그 이동 · 오른쪽 드래그 회전 · 휠 확대</div>`;
+
+function element<T extends HTMLElement>(id: string): T
+{
+	return document.getElementById(id) as T;
+}
+const canvas: HTMLCanvasElement = element("graph");
+const plot: GpuPlot = new GpuPlot(canvas, element("labels"));
+const core: CoreClient = new CoreClient();
+const content: HTMLElement = element("content");
+const state_schema = z.object
+({
+	dimension: z.union([z.literal(2), z.literal(3)]),
+	view: z.object({ lower: z.array(z.number()).length(2), upper: z.array(z.number()).length(2), preserve_aspect: z.boolean() }),
+	camera: z.object({ eye: z.array(z.number()).length(3), target: z.array(z.number()).length(3), up: z.array(z.number()).length(3),
+		projection: z.string(), fov_y: z.number(), near_distance: z.number(), far_distance: z.number(),
+		orthographic_width: z.number(), orthographic_height: z.number() }),
+});
+type State = z.infer<typeof state_schema>;
+interface DocumentValue { spec: ObjectValue; history: ObjectValue[] }
+let document_value: DocumentValue = { spec: structuredClone(presets[0]!.spec), history: [] };
+let state: State | undefined;
+let output: ObjectValue | undefined;
+let scene: SceneData | undefined;
+let sequence: number = 0;
+let tab: string = "input";
+let read_fields: () => ObjectValue = (): ObjectValue => structuredClone(document_value.spec);
+let gesture: { x: number; y: number; button: number; state: State } | undefined;
+let changed: boolean = false;
+let sync_timer: ReturnType<typeof setTimeout> | undefined;
+const system_theme: MediaQueryList = matchMedia("(prefers-color-scheme: dark)");
+let dark: boolean = system_theme.matches;
+let manual_theme: boolean = false;
+
+function error_text(error: unknown): void
+{
+	element("error").textContent = error instanceof Error ? error.message : String(error);
+}
+function clear_error(): void
+{
+	element("error").textContent = "";
+}
+function theme(): void
+{
+	document.body.classList.toggle("light", !dark);
+	plot.set_theme(dark);
+}
+theme();
+system_theme.addEventListener
+(
+	"change", (event: MediaQueryListEvent): void =>
+	{
+		if (!manual_theme)
+		{
+			dark = event.matches;
+			theme();
+		}
+	},
+);
+element("theme").onclick = (): void => { manual_theme = true; dark = !dark; theme(); };
+element("fold").onclick = (): void => { document.body.classList.add("collapsed"); };
+element("open").onclick = (): void => { document.body.classList.remove("collapsed"); };
+
+function size(): [number, number]
+{
+	return [Math.max(64, Math.min(4096, Math.round(innerWidth))), Math.max(64, Math.min(4096, Math.round(innerHeight)))];
+}
+
+async function render(candidate: DocumentValue, rebuild: boolean = false): Promise<boolean>
+{
+	const ticket: number = ++sequence;
+	clear_error();
+	element("status").textContent = "코어 계산 중…";
+	try
+	{
+		const spec: ObjectValue = candidate.spec;
+		const input: ObjectValue = { spec, history: candidate.history, canvas_size: size() };
+		if (spec.kind === "function")
+			input.expression_ast = parse_expression(String(spec.expression), Number(spec.dimension_count));
+
+		const result: ObjectValue = await core.request(input);
+		if (ticket !== sequence)
+			return false;
+
+		const next_scene: SceneData = scene_schema.parse(result);
+		const next_state: State = state_schema.parse(result);
+		plot.load(next_scene, next_state);
+		plot.set_theme(dark);
+		document_value = structuredClone(candidate);
+		state = next_state;
+		output = result;
+		scene = next_scene;
+		canvas.dataset.ready = "true";
+		canvas.dataset.dimension = String(next_scene.dimension);
+		canvas.dataset.revision = String(result.cache_revision);
+		element("status").textContent = `${next_scene.dimension}D · ${next_scene.vertices.length.toLocaleString()} 정점 · ` +
+			`${next_scene.triangles.length.toLocaleString()} 면 · revision ${result.cache_revision}`;
+		if (rebuild)
+			panel();
+
+		return true;
+	}
+	catch (error: unknown)
+	{
+		if (ticket === sequence)
+		{
+			error_text(error);
+			element("status").textContent = "적용 실패 · 마지막 성공 그래프 유지";
+		}
+
+		return false;
+	}
+}
+
+function heading(title: string, description: string): void
+{
+	const h: HTMLHeadingElement = document.createElement("h2");
+	h.textContent = title;
+	const p: HTMLParagraphElement = document.createElement("p");
+	p.textContent = description;
+	content.append(h, p);
+}
+function field(label: string, value: string, multiline: boolean = false): HTMLInputElement | HTMLTextAreaElement
+{
+	const wrap: HTMLLabelElement = document.createElement("label");
+	wrap.textContent = label;
+	const input: HTMLInputElement | HTMLTextAreaElement = document.createElement(multiline ? "textarea" : "input");
+	if (input instanceof HTMLInputElement)
+		input.type = "text";
+
+	input.value = value;
+	wrap.append(input);
+	content.append(wrap);
+
+	return input;
+}
+function json_field(label: string, value: unknown): HTMLTextAreaElement
+{
+	return field(label, JSON.stringify(value, null, 2), true) as HTMLTextAreaElement;
+}
+function button(label: string, action: () => void | Promise<void>): HTMLButtonElement
+{
+	const result: HTMLButtonElement = document.createElement("button");
+	result.textContent = label;
+	result.onclick = (): void =>
+	{
+		clear_error();
+		Promise.resolve().then(action).catch((error: unknown): void => error_text(error));
+	};
+	content.append(result);
+
+	return result;
+}
+function check(label: string, checked: boolean): HTMLInputElement
+{
+	const wrap: HTMLLabelElement = document.createElement("label");
+	wrap.className = "check";
+	const input: HTMLInputElement = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	wrap.append(input, document.createTextNode(label));
+	content.append(wrap);
+
+	return input;
+}
+function selection(label: string, values: string[], selected: string): HTMLSelectElement
+{
+	const wrap: HTMLLabelElement = document.createElement("label");
+	wrap.textContent = label;
+	const select: HTMLSelectElement = document.createElement("select");
+	for (const value of values)
+	{
+		const option: HTMLOptionElement = document.createElement("option");
+		option.textContent = value;
+		select.append(option);
+	}
+
+	select.value = selected;
+	wrap.append(select);
+	content.append(wrap);
+
+	return select;
+}
+function download(name: string, value: string, type: string = "application/json"): void
+{
+	const url: string = URL.createObjectURL(new Blob([value], { type }));
+	const anchor: HTMLAnchorElement = document.createElement("a");
+	anchor.href = url;
+	anchor.download = name;
+	anchor.click();
+	setTimeout((): void => URL.revokeObjectURL(url), 1000);
+}
+function upload(label: string, accept: string, receive: (text: string) => Promise<void>): void
+{
+	const input: HTMLInputElement = document.createElement("input");
+	input.type = "file";
+	input.accept = accept;
+	input.setAttribute("aria-label", label);
+	input.onchange = (): void =>
+	{
+		const file: File | undefined = input.files?.[0];
+		if (!file)
+			return;
+
+		if (file.size > 8 * 1024 * 1024)
+			return error_text(new Error("파일 상한은 8 MiB입니다."));
+
+		file.text().then(receive).catch((error: unknown): void => error_text(error));
+	};
+	const text: HTMLLabelElement = document.createElement("label");
+	text.textContent = label;
+	text.append(input);
+	content.append(text);
+}
+function presentation(spec: ObjectValue): ObjectValue
+{
+	if (!spec.presentation)
+		spec.presentation = {};
+
+	return object(spec.presentation);
+}
+function overrides(spec: ObjectValue): ObjectValue
+{
+	const display: ObjectValue = presentation(spec);
+	if (!display.overrides)
+		display.overrides = {};
+
+	return object(display.overrides);
+}
+
+function panel(): void
+{
+	content.replaceChildren();
+	const draft: ObjectValue = structuredClone(document_value.spec);
+	read_fields = (): ObjectValue => draft;
+	if (tab === "input")
+	{
+		heading("입력 · ND 데이터", "raw 입력에 표시 정보는 필요하지 않습니다. JSON 편집은 이 웹 호스트의 입력 양식입니다.");
+		const kind: HTMLSelectElement = selection("시각화 대상", ["function", "dataset", "histogram"], String(draft.kind));
+		const dimensions = field("ND 차원 수", String(draft.dimension_count));
+		const invalid = selection("결측값 정책 · null / 정의되지 않은 함수값", ["reject", "skip"], String(draft.invalid_values ?? "reject"));
+		const editors: Array<[string, HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, boolean]> = [];
+		if (draft.kind === "function")
+		{
+			heading("함수", "x/y/z 또는 x0…x63. + - * / ^, sin cos tan exp log sqrt abs min max pow, pi e. 코드 실행 없이 제한 AST만 사용합니다.");
+			editors.push(["expression", field("수식", String(draft.expression)), false]);
+			editors.push(["sampling", json_field("변화 축 · 범위 · 해상도 / 나머지 고정값", draft.sampling), true]);
+			editors.push(["surface_rendering", json_field("와이어프레임 / LOD", draft.surface_rendering ??
+				{ wireframe: "grid", wireframe_lines: [11, 11], lod: { enabled: true, max_error_pixels: 1 } }), true]);
+		}
+		else
+		{
+			editors.push(["rows", json_field("행 우선 원본 데이터 · null 허용", draft.rows), true]);
+			if (draft.kind === "dataset")
+			{
+				editors.push(["plot", selection("표현", ["points", "curve", "surface"], String(draft.plot)), false]);
+				editors.push(["columns", json_field("선택할 2개 / 3개 열", draft.columns), true]);
+				editors.push(["paths", json_field("임의 경로 · null은 입력 순서, []는 연결 없음", draft.paths ?? null), true]);
+				editors.push(["grid", json_field("곡면 격자 · u_count/v_count/row_indices", draft.grid ?? null), true]);
+			}
+			else
+			{
+				heading("집계", "mode: count / sum / mean. axes는 1개 또는 2개. uniform의 lower부터 step 간격으로 자르거나 intervals에 직접 구간을 지정합니다.");
+				editors.push(["histogram", json_field("구간 / 집계 / 값 열", draft.histogram), true]);
+			}
+		}
+
+		read_fields = (): ObjectValue =>
+		{
+			if (kind.value !== draft.kind)
+				throw new Error("대상 종류 변경은 위 예제 선택 또는 문서 탭의 전체 명세로 시작하세요.");
+
+			draft.dimension_count = Number(dimensions.value);
+			draft.invalid_values = invalid.value;
+			for (const [key, input, json] of editors)
+			{
+				const value: unknown = json ? JSON.parse(input.value) : input.value;
+				if (value === null)
+					delete draft[key];
+				else
+					draft[key] = value;
+			}
+
+			return draft;
+		};
+	}
+	else if (tab === "axes")
+	{
+		heading("축 · 범위", "격자는 무한 직선입니다. 축 길이는 샘플링·집계 범위와 독립입니다. 자동 설정으로 복원하려면 해당 필드를 null로 지정하세요.");
+		const display: ObjectValue = presentation(draft);
+		const patch: ObjectValue = overrides(draft);
+		const grid = check("격자 표시", Boolean(patch.show_grid ?? display.show_grid ?? true));
+		const axes = check("축 표시", Boolean(patch.show_axes ?? display.show_axes ?? true));
+		const arrows = check("축 화살표", Boolean(patch.show_axis_arrows ?? display.show_axis_arrows ?? true));
+		const config: ObjectValue = {};
+		for (const key of ["display_range", "grid_spacing", "grid_origin", "axis_lengths", "axis_origin"])
+			config[key] = patch[key] ?? display[key] ?? null;
+
+		const range = json_field("범위 / 간격 / 원점 / 축 길이", config);
+		const metadata = json_field("제목 / 출력 축 이름·단위", { title: display.title ?? "", axes: display.axes ?? [] });
+		const labels = json_field("ND 열·변수 이름·단위", draft.dimensions ?? []);
+		const out = json_field("함수 출력 이름·단위", draft.output ?? {});
+		read_fields = (): ObjectValue =>
+		{
+			const values: ObjectValue = object(JSON.parse(range.value));
+			for (const [key, value] of Object.entries(values))
+			{
+				if (value === null)
+				{
+					delete patch[key];
+					delete display[key];
+					if (key === "display_range")
+						patch.automatic_range = true;
+				}
+				else
+				{
+					patch[key] = value;
+					if (key === "display_range")
+						patch.automatic_range = false;
+				}
+			}
+
+			patch.show_grid = grid.checked;
+			patch.show_axes = axes.checked;
+			patch.show_axis_arrows = arrows.checked;
+			Object.assign(display, object(JSON.parse(metadata.value)));
+			draft.dimensions = JSON.parse(labels.value);
+			draft.output = JSON.parse(out.value);
+
+			return draft;
+		};
+	}
+	else if (tab === "style")
+	{
+		heading("색상 · 크기", "모든 요소의 RGBA를 개별 설정합니다. 2D 기본 축은 테마색, 3D 기본 축은 RGB입니다. 지정한 색은 테마 변경에도 유지됩니다.");
+		const patch: ObjectValue = overrides(draft);
+		const style: ObjectValue = object(patch.style ?? {});
+		patch.style = style;
+		for (const [key, label] of Object.entries({ background: "배경", grid: "격자", axes: "공통 축", stroke: "곡선",
+			points: "데이터 점", surface: "곡면", wireframe: "곡면 격자", bars: "히스토그램 막대", text: "일반 글자" }))
+		{
+			const fallback: unknown = key === "axes" ? [128, 128, 128, 255] : scene?.style[key as keyof SceneData["style"]];
+			const rgba: number[] = z.array(z.number()).length(4).parse(style[key] ?? fallback ?? [128, 128, 128, 255]);
+			const wrap: HTMLLabelElement = document.createElement("label");
+			wrap.textContent = label;
+			const row: HTMLDivElement = document.createElement("div");
+			row.className = "row";
+			const color: HTMLInputElement = document.createElement("input");
+			color.type = "color";
+			color.value = "#" + rgba.slice(0, 3).map((v: number): string => v.toString(16).padStart(2, "0")).join("");
+			color.setAttribute("aria-label", label + " 색상");
+			const alpha: HTMLInputElement = document.createElement("input");
+			alpha.type = "range"; alpha.min = "0"; alpha.max = "255"; alpha.value = String(rgba[3]);
+			alpha.setAttribute("aria-label", label + " 알파");
+			const update = (): void =>
+			{
+				style[key] = [1, 3, 5].map((offset: number): number => parseInt(color.value.slice(offset, offset + 2), 16));
+				(style[key] as number[]).push(Number(alpha.value));
+			};
+			color.oninput = update;
+			alpha.oninput = update;
+			row.append(color, alpha);
+			wrap.append(row);
+			content.append(wrap);
+		}
+
+		const colors = json_field("축별 RGBA · null은 공통 설정", style.axis_colors ?? [null, null, null]);
+		const sizes: ObjectValue = {};
+		const legacy_style: ObjectValue = object(presentation(draft).style ?? {});
+		for (const key of ["line_width", "point_radius", "grid_width", "axis_width", "arrow_length", "arrow_width", "bar_gap"])
+			sizes[key] = style[key] ?? legacy_style[key] ??
+				(key === "bar_gap" ? 0.1 : object(scene?.style ?? {})[key]);
+
+		const numbers = json_field("선·점·화살표 크기 / bar_gap (0 이상, 1 미만)", sizes);
+		read_fields = (): ObjectValue =>
+		{
+			style.axis_colors = JSON.parse(colors.value);
+			Object.assign(style, object(JSON.parse(numbers.value)));
+
+			return draft;
+		};
+		button("색상·크기 기본값 복원", async (): Promise<void> =>
+		{
+			delete patch.style;
+			delete presentation(draft).style;
+			await render({ spec: draft, history: document_value.history }, true);
+		});
+	}
+	else if (tab === "camera")
+	{
+		heading("관찰 · 투영", "왼쪽 드래그 이동, 오른쪽 드래그 3D 회전, 휠 확대·축소. 초기 3D는 양의 XYZ 쪽에서 보는 120° 등각 정투상입니다.");
+		const patch: ObjectValue = overrides(draft);
+		const view = json_field("2D 뷰 · preserve_aspect", patch.view ?? state?.view);
+		const camera = json_field("3D 카메라 · 원근 / 정투상 · fov_y는 라디안", patch.camera ?? state?.camera);
+		read_fields = (): ObjectValue =>
+		{
+			if (state?.dimension === 2)
+			{
+				patch.view = object(JSON.parse(view.value));
+				patch.automatic_view = false;
+			}
+			else
+			{
+				patch.camera = object(JSON.parse(camera.value));
+				patch.automatic_camera = false;
+			}
+
+			return draft;
+		};
+	}
+	else if (tab === "stream")
+	{
+		heading("증분 · 스트림", "행 ID는 삭제 후에도 재사용하지 않습니다. 실패 배치는 반영되지 않습니다. 웹 데모는 최대 128개 배치를 재현하고, 코어는 영향 행·셀만 증분 갱신합니다.");
+		const changes = json_field("append / replace / erase · 고정 row_id", { append: [[0, 0, 0, 1]], replace: [], erase: [] });
+		button("배치 적용", async (): Promise<void> =>
+		{
+			await render({ spec: document_value.spec, history: [...document_value.history, object(JSON.parse(changes.value))] }, true);
+		});
+		upload("NDJSON 배치 파일 · 한 줄에 한 변경 객체", ".ndjson,.jsonl,.txt", async (text: string): Promise<void> =>
+		{
+			for (const line of text.split(/\r?\n/).filter((value: string): boolean => value.trim().length > 0))
+				if (!await render({ spec: document_value.spec, history: [...document_value.history, object(JSON.parse(line))] }))
+					throw new Error("스트림 중단 · 앞서 성공한 배치는 유지됩니다.");
+
+			panel();
+		});
+		heading("전송 환경", "브라우저는 임의 TCP 수신 소켓을 열 수 없습니다. 로컬/네트워크 Boost.Asio 수신은 네이티브 호스트의 역할입니다. 이 페이지는 파일 스트림과 증분 배치를 직접 시험합니다.");
+		const pre: HTMLPreElement = document.createElement("pre");
+		pre.textContent = JSON.stringify({ row_ids: output?.row_ids, cache_revision: output?.cache_revision,
+			last_delta: output?.last_delta, cells: output?.cells }, null, 2);
+		content.append(pre);
+	}
+	else if (tab === "document")
+	{
+		heading("문서 · 테마", "raw 입력과 표시 정보를 포함한 문서를 모두 받습니다. .fgvtheme은 실제 코어가 읽고 정규화합니다. 명시 override는 프로파일 기본값보다 우선합니다.");
+		const editor = json_field("전체 웹 호스트 문서 · spec / history", document_value);
+		editor.className = "long";
+		button("문서 적용", async (): Promise<void> =>
+		{
+			const value: ObjectValue = object(JSON.parse(editor.value));
+			await render({ spec: object(value.spec ?? value), history: z.array(z.record(z.string(), z.unknown())).parse(value.history ?? []) }, true);
+		});
+		button("문서 저장", (): void => download("graph.fgv.json", JSON.stringify(document_value, null, 2)));
+		button("raw 저장", (): void =>
+		{
+			const raw: ObjectValue = structuredClone(document_value.spec);
+			for (const key of ["presentation", "dimensions", "output", "theme", "surface_rendering"])
+				delete raw[key];
+
+			download("graph.raw.json", JSON.stringify({ spec: raw, history: document_value.history }, null, 2));
+		});
+		upload("문서 / raw JSON 열기", ".json", async (text: string): Promise<void> =>
+		{
+			const value: ObjectValue = object(JSON.parse(text));
+			await render({ spec: object(value.spec ?? value), history: z.array(z.record(z.string(), z.unknown())).parse(value.history ?? []) }, true);
+		});
+		const theme_editor = field(".fgvtheme 프로파일", String(draft.theme ?? "fgv-theme 1\n"), true);
+		button("테마 검증·적용", async (): Promise<void> =>
+		{
+			const result: ObjectValue = await core.request({ operation: "theme", text: theme_editor.value });
+			draft.theme = result.text;
+			await render({ spec: draft, history: document_value.history }, true);
+		});
+		button("테마 저장", async (): Promise<void> =>
+		{
+			const result: ObjectValue = await core.request({ operation: "theme", text: theme_editor.value });
+			download("default.fgvtheme", String(result.text), "text/plain");
+		});
+		upload("테마 파일 열기", ".fgvtheme", async (text: string): Promise<void> =>
+		{
+			const result: ObjectValue = await core.request({ operation: "theme", text });
+			draft.theme = result.text;
+			await render({ spec: draft, history: document_value.history }, true);
+		});
+	}
+	else
+	{
+		heading("코어 · 진단", "행렬·기하·집계·프레임은 C++23 코어에서 생성합니다. JavaScript는 입력 해석과 Three.js 렌더링을 담당합니다.");
+		const transform = json_field("투영 / 역변환 / ray / 직선·선분 절단", {
+			world: [0, 0, 0], screen: [innerWidth / 2, innerHeight / 2], end: [1, 1, 1],
+			line: { origin: [0, 0, 0], direction: [1, 0, 0] },
+		});
+		const result: HTMLPreElement = document.createElement("pre");
+		button("현재 뷰에서 변환", async (): Promise<void> =>
+		{
+			result.textContent = JSON.stringify(await core.request({ ...object(JSON.parse(transform.value)), operation: "transform",
+				dimension: state?.dimension, view: state?.view, camera: state?.camera, viewport: scene?.rendering.viewport }), null, 2);
+		});
+		content.append(result);
+		button("코어 결과 JSON 저장", (): void => download("scene.json", JSON.stringify(output, null, 2)));
+		button("PNG 저장", (): void =>
+		{
+			const image: HTMLCanvasElement = document.createElement("canvas");
+			image.width = canvas.width; image.height = canvas.height;
+			const context: CanvasRenderingContext2D = image.getContext("2d")!;
+			context.fillStyle = getComputedStyle(element("stage")).backgroundColor;
+			context.fillRect(0, 0, image.width, image.height);
+			context.drawImage(canvas, 0, 0);
+			context.drawImage(element<HTMLCanvasElement>("labels"), 0, 0);
+			const anchor: HTMLAnchorElement = document.createElement("a");
+			anchor.download = "graph.png"; anchor.href = image.toDataURL(); anchor.click();
+		});
+		const info: HTMLPreElement = document.createElement("pre");
+		info.textContent = JSON.stringify({ version: "web 0.1.0 · core 0.7.0", range: output?.range, bounds: output?.bounds,
+			stats: output?.stats, sampling_axes: output?.sampling_axes, rendering: { canvas_size: scene?.rendering.canvas_size,
+				viewport: scene?.rendering.viewport, view_matrix: scene?.rendering.view_matrix,
+				projection_matrix: scene?.rendering.projection_matrix } }, null, 2);
+		content.append(info);
+	}
+}
+
+const tabs: Array<[string, string]> = [["input", "입력"], ["axes", "축·범위"], ["style", "색상·크기"],
+	["camera", "관찰"], ["stream", "증분·스트림"], ["document", "문서·테마"], ["diagnostics", "진단"]];
+for (const [id, label] of tabs)
+{
+	const control: HTMLButtonElement = document.createElement("button");
+	control.textContent = label;
+	control.dataset.tab = id;
+	control.classList.toggle("active", tab === id);
+	control.onclick = (): void =>
+	{
+		tab = id;
+		for (const child of document.querySelectorAll("nav button"))
+			child.classList.toggle("active", (child as HTMLElement).dataset.tab === id);
+
+		panel();
+	};
+	document.querySelector("nav")!.append(control);
+}
+const preset: HTMLSelectElement = element("preset");
+for (const [index, entry] of presets.entries())
+{
+	const option: HTMLOptionElement = document.createElement("option");
+	option.value = String(index); option.textContent = entry.name; preset.append(option);
+}
+
+preset.onchange = (): void => { void render({ spec: structuredClone(presets[Number(preset.value)]!.spec), history: [] }, true); };
+element("apply").onclick = (): void =>
+{
+	try
+	{
+		const spec: ObjectValue = read_fields();
+		void render({ spec, history: document_value.history }, true);
+	}
+	catch (error: unknown) { error_text(error); }
+};
+element("reset").onclick = (): void =>
+{
+	const spec: ObjectValue = structuredClone(document_value.spec);
+	const display: ObjectValue = presentation(spec);
+	const patch: ObjectValue = overrides(spec);
+	for (const key of ["view", "camera", "display_range"])
+	{
+		delete display[key];
+		delete patch[key];
+	}
+
+	Object.assign(patch, { automatic_range: true, automatic_view: true, automatic_camera: true });
+	void render({ spec, history: document_value.history }, true);
+};
+
+function commit_view(): void
+{
+	if (!state)
+		return;
+
+	const spec: ObjectValue = structuredClone(document_value.spec);
+	const patch: ObjectValue = overrides(spec);
+	if (state.dimension === 2)
+	{
+		patch.view = state.view;
+		patch.automatic_view = false;
+		delete patch.display_range;
+		delete presentation(spec).display_range;
+		patch.automatic_range = true;
+	}
+	else
+	{
+		patch.camera = state.camera;
+		patch.automatic_camera = false;
+	}
+
+	void render({ spec, history: document_value.history }, tab === "camera");
+}
+canvas.oncontextmenu = (event: MouseEvent): void => event.preventDefault();
+canvas.onpointerdown = (event: PointerEvent): void =>
+{
+	if (!state || (event.button !== 0 && event.button !== 2))
+		return;
+
+	canvas.setPointerCapture(event.pointerId);
+	++sequence;
+	gesture = { x: event.clientX, y: event.clientY, button: event.button, state: structuredClone(state) };
+};
+canvas.onpointermove = (event: PointerEvent): void =>
+{
+	if (!gesture || !state)
+		return;
+
+	const dx: number = (event.clientX - gesture.x) / innerWidth;
+	const dy: number = (event.clientY - gesture.y) / innerHeight;
+	const next: State = structuredClone(gesture.state);
+	if (gesture.button === 0)
+	{
+		if (next.dimension === 2)
+		{
+			const x: number = -dx * (next.view.upper[0]! - next.view.lower[0]!);
+			const y: number = dy * (next.view.upper[1]! - next.view.lower[1]!);
+			for (const edge of [next.view.lower, next.view.upper]) { edge[0]! += x; edge[1]! += y; }
+		}
+		else
+		{
+			const offset: number[] = plot.pan_offset(dx, dy, next.camera.target);
+			for (let axis: number = 0; axis < 3; ++axis)
+			{
+				next.camera.eye[axis]! += offset[axis]!;
+				next.camera.target[axis]! += offset[axis]!;
+			}
+		}
+	}
+	else if (next.dimension === 3)
+	{
+		const [x, y, z_] = next.camera.eye.map((value: number, axis: number): number => value - next.camera.target[axis]!);
+		const radius: number = Math.hypot(x!, y!, z_!);
+		const azimuth: number = Math.atan2(y!, x!) - dx * Math.PI * 2;
+		const elevation: number = Math.max(-1.52, Math.min(1.52, Math.asin(z_! / radius) + dy * Math.PI));
+		next.camera.eye = [radius * Math.cos(elevation) * Math.cos(azimuth), radius * Math.cos(elevation) * Math.sin(azimuth),
+			radius * Math.sin(elevation)].map((value: number, axis: number): number => value + next.camera.target[axis]!);
+	}
+
+	state = next;
+	plot.preview(next);
+	changed = true;
+};
+canvas.onpointerup = (event: PointerEvent): void =>
+{
+	if (gesture)
+	{
+		gesture = undefined;
+		canvas.releasePointerCapture(event.pointerId);
+		commit_view();
+	}
+};
+canvas.onpointercancel = (): void => { gesture = undefined; commit_view(); };
+canvas.addEventListener
+(
+	"wheel", (event: WheelEvent): void =>
+	{
+		event.preventDefault();
+		if (!state)
+			return;
+
+		++sequence;
+		const factor: number = Math.exp(Math.max(-0.4, Math.min(0.4, -event.deltaY * 0.0015)));
+		if (state.dimension === 2)
+			for (let axis: number = 0; axis < 2; ++axis)
+			{
+				const center: number = (state.view.lower[axis]! + state.view.upper[axis]!) / 2;
+				state.view.lower[axis] = center + (state.view.lower[axis]! - center) / factor;
+				state.view.upper[axis] = center + (state.view.upper[axis]! - center) / factor;
+			}
+		else if (state.camera.projection === "orthographic")
+		{
+			state.camera.orthographic_width /= factor;
+			state.camera.orthographic_height /= factor;
+		}
+		else
+			state.camera.eye = state.camera.eye.map
+			(
+				(value: number, axis: number): number => state!.camera.target[axis]! + (value - state!.camera.target[axis]!) / factor,
+			);
+
+		plot.preview(state);
+		changed = true;
+		clearTimeout(sync_timer);
+		sync_timer = setTimeout(commit_view, 140);
+	}, { passive: false },
+);
+function animate(): void
+{
+	if (changed)
+	{
+		plot.draw();
+		changed = false;
+	}
+
+	requestAnimationFrame(animate);
+}
+animate();
+let resize_timer: ReturnType<typeof setTimeout> | undefined;
+window.addEventListener("resize", (): void =>
+{
+	clearTimeout(resize_timer);
+	resize_timer = setTimeout((): void => { void render(document_value); }, 160);
+});
+window.addEventListener("pagehide", (): void => { core.dispose(); plot.dispose(); });
+panel();
+void render(document_value, true);
