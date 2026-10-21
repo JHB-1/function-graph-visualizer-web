@@ -94,6 +94,25 @@ test('live style keeps focus and geometry; file menu exports resolved core style
 	await expect(page.locator("#graph")).toHaveAttribute("data-source-triangles", vertices!);
 	await line.fill("3.2");
 	await expect(page.locator("#error")).toBeEmpty();
+	await ready(page);
+	const updated_during_input: boolean = await page.evaluate
+	(
+		async (): Promise<boolean> =>
+		{
+			const canvas: HTMLCanvasElement = document.querySelector("#graph")!;
+			const before: number = Number(canvas.dataset.frames);
+			const alpha: HTMLInputElement = document.querySelector('[aria-label="곡면 알파"]')!;
+			for (let index: number = 0; index < 16; ++index)
+			{
+				alpha.value = String(220 - index);
+				alpha.dispatchEvent(new Event("input", { bubbles: true }));
+				await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, 20); });
+			}
+
+			return Number(canvas.dataset.frames) > before;
+		},
+	);
+	expect(updated_during_input).toBe(true);
 	await page.getByLabel("곡면 색상", { exact: true }).evaluate
 	(
 		(input: HTMLInputElement): void =>

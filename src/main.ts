@@ -366,6 +366,7 @@ function overrides(spec: ObjectValue): ObjectValue
 function panel(): void
 {
 	clearTimeout(style_timer);
+	style_timer = undefined;
 	content.replaceChildren();
 	content.setAttribute("aria-labelledby", `tab-${tab}`);
 	element("apply").hidden = !["input", "axes", "camera"].includes(tab);
@@ -700,11 +701,14 @@ function schedule_style(): void
 	if (tab !== "style")
 		return;
 
-	clearTimeout(style_timer);
+	if (style_timer !== undefined)
+		return;
+
 	style_timer = setTimeout
 	(
 		(): void =>
 		{
+			style_timer = undefined;
 			try
 			{
 				const candidate: ObjectValue = structuredClone(read_fields());

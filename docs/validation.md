@@ -22,6 +22,7 @@ GV main 9a83a0b의 docs/workspace-ui.md와 src/workspace.css를 기준으로 동
 core/WASM 수학은 변경하지 않았습니다. desktop 56px/300px/나머지 캔버스와 모바일 48px/오버레이,
 ARIA 탭/키보드/Home/End/Escape, 접기/열기, 줌/맞춤, 파일 출력 메뉴를 검사했습니다.
 스타일은 90ms 입력 병합과 포커스/기하 보존, 오류 입력의 이전 유효 그래프 보존을 확인했습니다.
+연속 슬라이더 입력 16회 중에도 프레임이 갱신되며, 입력 종료까지 기다리는 debounce와 구별합니다.
 Pretendard 실제 FontFace 로드, Canvas 라벨 font-family, JSON/수식 고정폭,
 폰트 준비 후 PNG 출력의 서명과 캔버스 크기를 검사했습니다.
 strict TypeScript/production build와 실제 브라우저 4/4, 기존 WASM 테스트 9/9 통과입니다.
