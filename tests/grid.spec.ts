@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Dialog } from "@playwright/test";
+import { test, expect, type Page, type Dialog, type Request } from "@playwright/test";
 
 async function ready(page: Page): Promise<void>
 {
@@ -103,8 +103,25 @@ test
 	"default 3D planes extend across the viewport and remain after camera gestures",
 	async ({ page }: { page: Page }): Promise<void> =>
 	{
+		const runtime_urls: string[] = [];
+		page.on
+		(
+			"request",
+			(request: Request): void =>
+			{
+				const url: URL = new URL(request.url());
+				if (/\/fgv-runtime\.(mjs|wasm)$/.test(url.pathname))
+					runtime_urls.push(url.href);
+			},
+		);
 		await page.goto("./");
 		await ready(page);
+		expect(runtime_urls).toHaveLength(2);
+		const versions: string[] = runtime_urls.map((url: string): string => new URL(url).searchParams.get("v") ?? "");
+		for (const version of versions)
+			expect(version).toMatch(/^[0-9a-f]{64}-[0-9a-f]{64}$/);
+
+		expect(versions[0]).toBe(versions[1]);
 		await expect.poll(async (): Promise<number> => Number(await page.locator("#graph").getAttribute("data-grid-lines")))
 			.toBeGreaterThan(40);
 		await page.screenshot({ path: "test-results/grid-3d-filled.png" });

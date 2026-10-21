@@ -18,7 +18,19 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>): Promise<void> =>
 		if (!runtime)
 			runtime = import(/* @vite-ignore */ runtime_url).then
 			(
-				(module: { default: () => Promise<Runtime> }): Promise<Runtime> => module.default(),
+				(module: { default: (options: { locateFile: (name: string) => string }) => Promise<Runtime> }): Promise<Runtime> =>
+					module.default
+					(
+						{
+							locateFile: (name: string): string =>
+							{
+								const url: URL = new URL(name, runtime_url);
+								url.search = new URL(runtime_url).search;
+
+								return url.href;
+							},
+						},
+					),
 			);
 
 		const instance: Runtime = await runtime;

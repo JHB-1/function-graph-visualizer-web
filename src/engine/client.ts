@@ -1,3 +1,7 @@
+import runtime_lock from "../../runtime.lock.json";
+
+const runtime_version: string = runtime_lock.files.map((file: { sha256: string }): string => file.sha256).join("-");
+
 export type ObjectValue = Record<string, unknown>;
 
 export function object(value: unknown): ObjectValue
@@ -52,7 +56,9 @@ export class CoreClient
 			(resolve: (value: ObjectValue) => void, reject: (error: Error) => void): void =>
 			{
 				this.pending.set(id, { resolve, reject });
-				this.worker.postMessage({ id, input, runtime_url: new URL("./runtime/fgv-runtime.mjs", document.baseURI).href });
+				const runtime_url: URL = new URL("./runtime/fgv-runtime.mjs", document.baseURI);
+				runtime_url.searchParams.set("v", runtime_version);
+				this.worker.postMessage({ id, input, runtime_url: runtime_url.href });
 			},
 		);
 	}
