@@ -129,7 +129,7 @@ pre { font: 10px/1.65 Consolas, monospace; color: var(--muted); overflow-wrap: a
 }
 #recovery p { margin: 0 0 8px; color: var(--text); }
 #recovery button { margin-right: 6px; }
-.item-list { display: flex; flex-direction: column; gap: 5px; }
+.item-list { display: flex; flex-direction: column; gap: 5px; max-height: min(32dvh, 280px); overflow-y: auto; }
 .item-list button { width: 100%; text-align: left; overflow-wrap: anywhere; }
 .item-list [aria-pressed=true] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 #item-marker

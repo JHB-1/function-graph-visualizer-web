@@ -37,7 +37,8 @@ rel="noopener noreferrer" aria-label="GitHub 저장소">↗</a></nav>
 <button id="zoom-out" aria-label="축소">−</button><span id="zoom-level" aria-live="off">100%</span>
 <button id="zoom-in" aria-label="확대">＋</button><button id="reset" aria-label="그래프 맞춤">맞춤</button></div>
 <div id="hud" class="canvas-caption">왼쪽 이동 <span>·</span> 오른쪽 회전 <span>·</span> 휠 확대</div>
-<div id="error" role="alert"></div></main></div>`;
+<div id="error" role="alert"></div></main></div>
+<input id="document-picker" type="file" accept=".json,application/json" hidden>`;
 
 function element<T extends HTMLElement>(id: string): T
 {
@@ -56,6 +57,17 @@ const state_schema = z.object
 		orthographic_width: z.number(), orthographic_height: z.number() }),
 });
 type State = z.infer<typeof state_schema>;
+const screen_vertex_schema = z.object({ source_index: z.number().int(), position: z.array(z.number()).length(3),
+	screen: z.array(z.number()).length(3).nullable() });
+type ScreenVertex = z.infer<typeof screen_vertex_schema>;
+let view_log: State[] = [];
+let view_cursor: number = -1;
+const bookmarks: Array<{ name: string; view: State }> = [];
+let rendering: boolean = false;
+let exporting: boolean = false;
+let png_scale: number = 1;
+let png_transparent: boolean = false;
+let png_selection: boolean = false;
 let document_value: DocumentValue = { spec: structuredClone(presets[0]!.spec), history: [] };
 let document_name: string = "새 문서";
 let baseline: string = JSON.stringify(document_value);
@@ -96,6 +108,83 @@ function dirty(): boolean
 function document_status(): void
 {
 	element("document-status").textContent = `${document_name} · ${dirty() ? "미저장" : "변경 없음"} · ${storage_message}`;
+}
+
+function require_idle(): void
+{
+	if (gesture || sync_timer !== undefined || style_timer !== undefined || rendering || exporting)
+		throw new Error("조작·계산·출력이 끝난 뒤 다시 시도하세요.");
+}
+
+function reset_navigation(): void
+{
+	view_log = state ? [structuredClone(state)] : [];
+	view_cursor = view_log.length - 1;
+	bookmarks.length = 0;
+}
+
+function remember_view(view: State): void
+{
+	if (view_log[view_cursor]?.dimension !== view.dimension)
+	{
+		view_log = [];
+		view_cursor = -1;
+		bookmarks.length = 0;
+	}
+
+	if (JSON.stringify(view_log[view_cursor]) === JSON.stringify(view))
+		return;
+
+	view_log = view_log.slice(0, view_cursor + 1);
+	view_log.push(structuredClone(view));
+	if (view_log.length > 100)
+		view_log.shift();
+
+	view_cursor = view_log.length - 1;
+}
+
+async function restore_view(view: State, remember: boolean = true): Promise<void>
+{
+	require_idle();
+	if (!state || view.dimension !== state.dimension)
+		throw new Error("현재 그래프와 화면 차원이 다릅니다.");
+
+	const previous: State = structuredClone(state);
+	state = structuredClone(view);
+	if (await commit_view(remember))
+		return;
+
+	state = previous;
+	plot.preview(previous);
+	plot.draw();
+	throw new Error("화면 복원 실패 · 이전 관찰 상태 유지");
+}
+
+async function open_view(index: number): Promise<void>
+{
+	require_idle();
+	const view: State | undefined = view_log[index];
+	if (!view)
+		return;
+
+	const previous: number = view_cursor;
+	view_cursor = index;
+	try { await restore_view(view, false); }
+	catch (error: unknown) { view_cursor = previous; throw error; }
+}
+
+function selected_vertices(result: ObjectValue): ScreenVertex[]
+{
+	if (!selected_item)
+		throw new Error("항목을 먼저 선택하세요.");
+
+	const vertices: ScreenVertex[] = z.array(screen_vertex_schema).parse(result.vertices);
+	const selected: ScreenVertex[] = selected_item === "graph" ? vertices :
+		vertices.filter((vertex: ScreenVertex): boolean => vertex.source_index === Number(selected_item!.split(":")[1]));
+	if (!selected.length)
+		throw new Error("선택 항목에는 표시할 좌표가 없습니다.");
+
+	return selected;
 }
 
 function schedule_save(): void
@@ -153,6 +242,9 @@ async function clear_local_record(all: boolean = false): Promise<void>
 
 async function replace_document(candidate: DocumentValue, name: string): Promise<boolean>
 {
+	try { require_idle(); }
+	catch (error: unknown) { error_text(error); return false; }
+
 	if (dirty() && !confirm("저장하지 않은 변경 사항을 버리고 문서를 교체할까요?"))
 		return false;
 
@@ -168,6 +260,7 @@ async function replace_document(candidate: DocumentValue, name: string): Promise
 	current_preset = "";
 	preset.value = "";
 	zoom_reference = state ? structuredClone(state) : undefined;
+	reset_navigation();
 	zoom_label();
 	update_marker();
 	if (tab === "items")
@@ -185,6 +278,25 @@ async function open_file(file: File): Promise<void>
 
 	const candidate: DocumentValue = parse_document(await file.text());
 	await replace_document(candidate, file.name);
+}
+
+function configure_picker(input: HTMLInputElement): void
+{
+	input.onchange = (): void =>
+	{
+		const selected: File | undefined = input.files?.[0];
+		if (selected)
+			void open_file(selected).catch((error: unknown): void => error_text(error));
+
+		input.value = "";
+	};
+}
+
+function export_document(): void
+{
+	download("graph.fgv.json", JSON.stringify(document_value, null, 2));
+	baseline = JSON.stringify(document_value);
+	document_status();
 }
 
 function error_text(error: unknown): void
@@ -252,9 +364,13 @@ function zoom_label(): void
 	element("zoom-level").textContent = `${Math.round(ratio * 100)}%`;
 }
 
-async function render(candidate: DocumentValue, rebuild: boolean = false): Promise<boolean>
+async function render(candidate: DocumentValue, rebuild: boolean = false, remember: boolean = true): Promise<boolean>
 {
+	if (exporting)
+		return false;
+
 	const ticket: number = ++sequence;
+	rendering = true;
 	clear_error();
 	element("status").textContent = "코어 계산 중…";
 	try
@@ -279,6 +395,8 @@ async function render(candidate: DocumentValue, rebuild: boolean = false): Promi
 		if (edited || rebuild)
 			pending_fields = false;
 		state = next_state;
+		if (remember)
+			remember_view(next_state);
 		zoom_reference ??= structuredClone(next_state);
 		zoom_label();
 		output = result;
@@ -308,6 +426,11 @@ async function render(candidate: DocumentValue, rebuild: boolean = false): Promi
 		}
 
 		return false;
+	}
+	finally
+	{
+		if (ticket === sequence)
+			rendering = false;
 	}
 }
 
@@ -367,6 +490,7 @@ function selection(label: string, values: string[], selected: string): HTMLSelec
 	const wrap: HTMLLabelElement = document.createElement("label");
 	wrap.textContent = label;
 	const select: HTMLSelectElement = document.createElement("select");
+	select.setAttribute("aria-label", label);
 	for (const value of values)
 	{
 		const option: HTMLOptionElement = document.createElement("option");
@@ -382,6 +506,7 @@ function selection(label: string, values: string[], selected: string): HTMLSelec
 }
 function download(name: string, value: string, type: string = "application/json"): void
 {
+	require_idle();
 	const url: string = URL.createObjectURL(new Blob([value], { type }));
 	const anchor: HTMLAnchorElement = document.createElement("a");
 	anchor.href = url;
@@ -391,20 +516,87 @@ function download(name: string, value: string, type: string = "application/json"
 }
 async function export_png(): Promise<void>
 {
-	await document.fonts.ready;
-	plot.draw();
-	const image: HTMLCanvasElement = document.createElement("canvas");
-	image.width = canvas.width;
-	image.height = canvas.height;
-	const context: CanvasRenderingContext2D = image.getContext("2d")!;
-	context.fillStyle = getComputedStyle(element("stage")).backgroundColor;
-	context.fillRect(0, 0, image.width, image.height);
-	context.drawImage(canvas, 0, 0);
-	context.drawImage(element<HTMLCanvasElement>("labels"), 0, 0);
-	const anchor: HTMLAnchorElement = document.createElement("a");
-	anchor.download = "graph.png";
-	anchor.href = image.toDataURL();
-	anchor.click();
+	require_idle();
+	const [width, height] = size();
+	const scaled_width: number = width * png_scale;
+	const scaled_height: number = height * png_scale;
+	if (scaled_width > 4096 || scaled_height > 4096 || scaled_width * scaled_height > 32000000)
+		throw new Error("PNG 상한은 각 변 4096px, 전체 32MP입니다. 배율을 줄이세요.");
+
+	if (png_selection && output)
+		selected_vertices(output);
+
+	exporting = true;
+	const box: HTMLDivElement = document.createElement("div");
+	box.dataset.exportPreview = "true";
+	box.style.cssText = `position:fixed;left:-100000px;top:0;width:${width}px;height:${height}px;pointer-events:none`;
+	const image_canvas: HTMLCanvasElement = document.createElement("canvas");
+	const image_labels: HTMLCanvasElement = document.createElement("canvas");
+	box.append(image_canvas, image_labels);
+	document.body.append(box);
+	let preview: GpuPlot | undefined;
+	try
+	{
+		await document.fonts.ready;
+		const source: DocumentValue = structuredClone(document_value);
+		const input: ObjectValue = { ...source, canvas_size: [scaled_width, scaled_height] };
+		if (source.spec.kind === "function")
+			input.expression_ast = parse_expression(String(source.spec.expression), Number(source.spec.dimension_count));
+
+		const result: ObjectValue = await core.request(input);
+		const geometry: SceneData = scene_schema.parse(result);
+		if (png_transparent)
+		{
+			geometry.style.background[3] = 0;
+			geometry.rendering.host_background = false;
+		}
+
+		preview = new GpuPlot(image_canvas, image_labels);
+		preview.load(geometry, state_schema.parse(result));
+		preview.set_theme(dark);
+		preview.draw();
+		let left: number = 0, top: number = 0, right: number = scaled_width, bottom: number = scaled_height;
+		if (png_selection)
+		{
+			const points: number[][] = selected_vertices(result).flatMap
+			(
+				(vertex: ScreenVertex): number[][] => vertex.screen ? [vertex.screen] : [],
+			);
+			if (!points.length)
+				throw new Error("선택 영역이 현재 화면에 없습니다.");
+
+			const pad: number = 12 * png_scale;
+			left = Math.max(0, Math.floor(Math.min(...points.map((point: number[]): number => point[0]!)) - pad));
+			top = Math.max(0, Math.floor(Math.min(...points.map((point: number[]): number => point[1]!)) - pad));
+			right = Math.min(scaled_width, Math.ceil(Math.max(...points.map((point: number[]): number => point[0]!)) + pad));
+			bottom = Math.min(scaled_height, Math.ceil(Math.max(...points.map((point: number[]): number => point[1]!)) + pad));
+			if (left >= right || top >= bottom)
+				throw new Error("선택 영역이 현재 화면에 없습니다.");
+		}
+
+		const image: HTMLCanvasElement = document.createElement("canvas");
+		image.width = right - left;
+		image.height = bottom - top;
+		const context: CanvasRenderingContext2D = image.getContext("2d")!;
+		if (!png_transparent)
+		{
+			context.fillStyle = getComputedStyle(element("stage")).backgroundColor;
+			context.fillRect(0, 0, image.width, image.height);
+		}
+
+		context.drawImage(image_canvas, -left, -top);
+		context.drawImage(image_labels, -left, -top);
+		const anchor: HTMLAnchorElement = document.createElement("a");
+		anchor.download = "graph.png";
+		anchor.href = image.toDataURL();
+		anchor.click();
+	}
+	finally
+	{
+		preview?.dispose();
+		box.remove();
+		exporting = false;
+	}
 }
 
 function file_menu(): void
@@ -429,12 +621,7 @@ function file_menu(): void
 	const choices: Array<[string, () => void | Promise<void>]> =
 	[
 		["이미지 파일로 출력 (.png)", export_png],
-		["그래프 문서로 출력 (.json)", (): void =>
-		{
-			download("graph.fgv.json", JSON.stringify(document_value, null, 2));
-			baseline = JSON.stringify(document_value);
-			document_status();
-		}],
+		["그래프 문서로 출력 (.json)", export_document],
 		["raw 데이터로 출력 (.json)", (): void =>
 		{
 			const raw: ObjectValue = structuredClone(document_value.spec);
@@ -777,7 +964,32 @@ function panel(): void
 			item_page = Math.min(Math.max(0, Math.ceil(count / 100) - 1), item_page + 1);
 			draw_list();
 		});
-		button("위치 찾기", locate_item);
+		button("위치 찾기", (): void => locate_item());
+		const view_heading: HTMLHeadingElement = document.createElement("h3");
+		view_heading.textContent = "화면";
+		content.append(view_heading);
+		button("이전", async (): Promise<void> => { await open_view(view_cursor - 1); }).disabled = view_cursor <= 0;
+		button("다음", async (): Promise<void> => { await open_view(view_cursor + 1); }).disabled = view_cursor + 1 >= view_log.length;
+		button("선택 항목에 맞춤", (): void => locate_item(true));
+		const bookmark = field("화면 이름", "") as HTMLInputElement;
+		bookmark.maxLength = 80;
+		button("현재 화면 저장", (): void =>
+		{
+			require_idle();
+			const name: string = bookmark.value.trim();
+			if (!state || !name || bookmarks.length >= 20 ||
+				bookmarks.some((entry: typeof bookmarks[number]): boolean => entry.name === name))
+				throw new Error("중복되지 않는 화면 이름이 필요합니다. 최대 20개까지 저장합니다.");
+
+			bookmarks.push({ name, view: structuredClone(state) });
+			panel();
+		});
+		for (const entry of bookmarks)
+		{
+			button(`${entry.name} 열기`, async (): Promise<void> => { await restore_view(entry.view); });
+			button(`${entry.name} 삭제`, (): void => { bookmarks.splice(bookmarks.indexOf(entry), 1); panel(); });
+		}
+
 		draw_list();
 	}
 	else if (tab === "document")
@@ -792,14 +1004,7 @@ function panel(): void
 		file.type = "file";
 		file.accept = ".json,application/json";
 		file.setAttribute("aria-label", "파일 열기 (.json)");
-		file.onchange = (): void =>
-		{
-			const selected: File | undefined = file.files?.[0];
-			if (selected)
-				void open_file(selected).catch((error: unknown): void => error_text(error));
-
-			file.value = "";
-		};
+		configure_picker(file);
 		content.append(file);
 		const save = check("자동 저장", autosave);
 		save.onchange = (): void =>
@@ -821,6 +1026,20 @@ function panel(): void
 			if (confirm("FGV의 모든 탭에서 저장한 로컬 기록을 지울까요?"))
 				await clear_local_record(true);
 		});
+		const options_heading: HTMLHeadingElement = document.createElement("h3");
+		options_heading.textContent = "이미지 출력 옵션";
+		content.append(options_heading);
+		const scale = selection("PNG 배율", ["1×", "2×", "3×"], `${png_scale}×`);
+		scale.onchange = (): void => { png_scale = Number(scale.value[0]); };
+		const transparent = check("투명 배경", png_transparent);
+		transparent.onchange = (): void => { png_transparent = transparent.checked; };
+		const extent = selection("출력 범위", ["현재 화면", "선택 영역"], png_selection ? "선택 영역" : "현재 화면");
+		extent.onchange = (): void => { png_selection = extent.value === "선택 영역"; };
+		const help: HTMLParagraphElement = document.createElement("p");
+		help.textContent = "PNG는 코어 뷰를 다시 계산해 출력합니다. 각 변 4096px 이하, 32MP 이하입니다. " +
+			"Ctrl/Cmd+S: JSON 출력 · Ctrl/Cmd+O: 파일 열기 · Ctrl/Cmd+F: 항목 검색";
+		help.setAttribute("aria-label", "단축키 안내");
+		content.append(help);
 		const editor = json_field("전체 웹 호스트 문서 · spec / history", document_value);
 		editor.className = "long";
 		button("문서 적용", async (): Promise<void> =>
@@ -979,6 +1198,7 @@ element("apply").onclick = (): void =>
 {
 	try
 	{
+		require_idle();
 		const spec: ObjectValue = read_fields();
 		void render({ spec, history: document_value.history }, true);
 	}
@@ -1000,10 +1220,10 @@ element("reset").onclick = (): void =>
 	void render({ spec, history: document_value.history }, true);
 };
 
-function commit_view(): void
+async function commit_view(remember: boolean = true): Promise<boolean>
 {
 	if (!state)
-		return;
+		return false;
 
 	const spec: ObjectValue = structuredClone(document_value.spec);
 	const patch: ObjectValue = overrides(spec);
@@ -1021,17 +1241,18 @@ function commit_view(): void
 		patch.automatic_camera = false;
 	}
 
-	void render({ spec, history: document_value.history }, tab === "camera");
+	return render({ spec, history: document_value.history }, tab === "camera", remember);
 }
 canvas.oncontextmenu = (event: MouseEvent): void => event.preventDefault();
 canvas.onpointerdown = (event: PointerEvent): void =>
 {
-	if (!state || (event.button !== 0 && event.button !== 2))
+	if (exporting || !state || (event.button !== 0 && event.button !== 2))
 		return;
 
 	canvas.setPointerCapture(event.pointerId);
 	element("item-marker").hidden = true;
 	++sequence;
+	rendering = false;
 	gesture = { x: event.clientX, y: event.clientY, button: event.button, state: structuredClone(state) };
 };
 canvas.onpointermove = (event: PointerEvent): void =>
@@ -1084,13 +1305,11 @@ canvas.onpointerup = (event: PointerEvent): void =>
 	}
 };
 canvas.onpointercancel = (): void => { gesture = undefined; commit_view(); };
-function zoom_by(factor: number): void
+function scale_view(factor: number): void
 {
 	if (!state)
 		return;
 
-	++sequence;
-	element("item-marker").hidden = true;
 	if (state.dimension === 2)
 		for (let axis: number = 0; axis < 2; ++axis)
 		{
@@ -1109,10 +1328,21 @@ function zoom_by(factor: number): void
 			(value: number, axis: number): number => state!.camera.target[axis]! + (value - state!.camera.target[axis]!) / factor,
 		);
 
+}
+
+function zoom_by(factor: number): void
+{
+	if (exporting || !state)
+		return;
+
+	++sequence;
+	rendering = false;
+	element("item-marker").hidden = true;
+	scale_view(factor);
 	plot.preview(state);
 	changed = true;
 	clearTimeout(sync_timer);
-	sync_timer = setTimeout(commit_view, 140);
+	sync_timer = setTimeout((): void => { sync_timer = undefined; void commit_view(); }, 140);
 	zoom_label();
 }
 element("zoom-in").onclick = (): void => zoom_by(1.2);
@@ -1138,8 +1368,7 @@ function animate(): void
 
 function make_items(result: ObjectValue, geometry: SceneData, spec: ObjectValue): Item[]
 {
-	const vertices = z.array(z.object({ source_index: z.number().int(), position: z.array(z.number()).length(3),
-		screen: z.array(z.number()).length(3).nullable() })).parse(result.vertices);
+	const vertices: ScreenVertex[] = z.array(screen_vertex_schema).parse(result.vertices);
 	const positions = new Map(vertices.map((vertex: typeof vertices[number]): [number, typeof vertex] => [vertex.source_index, vertex]));
 	const entries: Item[] = [{ id: "graph", label: geometry.title }];
 	if (spec.kind === "histogram")
@@ -1169,8 +1398,9 @@ function update_marker(): void
 	marker.style.top = `${item.screen[1]! * area.height / canvas.height}px`;
 }
 
-function locate_item(): void
+function locate_item(fit: boolean = false): void
 {
+	require_idle();
 	const item: Item | undefined = items.find((entry: Item): boolean => entry.id === selected_item);
 	if (!item || !state)
 		throw new Error("항목을 먼저 선택하세요.");
@@ -1181,7 +1411,20 @@ function locate_item(): void
 	if (!item.position)
 		throw new Error("이 항목에는 표시할 좌표가 없습니다.");
 
-	const point: number[] = item.position;
+	let point: number[] = item.position;
+	let factor: number = 1;
+	if (fit && output)
+	{
+		const vertices = selected_vertices(output);
+		point = [0, 1, 2].map((axis: number): number =>
+			(Math.min(...vertices.map((vertex: ScreenVertex): number => vertex.position[axis]!)) +
+				Math.max(...vertices.map((vertex: ScreenVertex): number => vertex.position[axis]!))) / 2);
+		const screens: number[][] = vertices.flatMap((vertex: ScreenVertex): number[][] => vertex.screen ? [vertex.screen] : []);
+		if (screens.length)
+			factor = Math.max(.1, Math.min(10, ...[0, 1].map((axis: number): number =>
+				.65 * size()[axis]! / Math.max(10, Math.max(...screens.map((p: number[]): number => p[axis]!)) -
+					Math.min(...screens.map((p: number[]): number => p[axis]!))))));
+	}
 	if (state.dimension === 2)
 		for (let axis: number = 0; axis < 2; ++axis)
 		{
@@ -1196,7 +1439,8 @@ function locate_item(): void
 			state.camera.target[axis] = point[axis]!;
 		}
 
-	commit_view();
+	scale_view(factor);
+	void commit_view();
 }
 
 async function initialize(): Promise<void>
@@ -1246,6 +1490,7 @@ element("recover").onclick = (): void =>
 
 		document_name = candidate.name;
 		baseline = "";
+		reset_navigation();
 		pending_fields = false;
 		recovery = undefined;
 		recovery_pending = false;
@@ -1273,6 +1518,31 @@ animate();
 document.fonts.ready.then((): void => { plot.draw(); });
 document.addEventListener("keydown", (event: KeyboardEvent): void =>
 {
+	if ((event.ctrlKey || event.metaKey) && !event.altKey && ["KeyS", "KeyO", "KeyF"].includes(event.code))
+	{
+		event.preventDefault();
+		try
+		{
+			if (event.code === "KeyS")
+				export_document();
+			else if (event.code === "KeyO")
+			{
+				require_idle();
+				element<HTMLInputElement>("document-picker").click();
+			}
+			else
+			{
+				select_tab("items");
+				const search: HTMLInputElement = content.querySelector('input[type="search"]')!;
+				search.focus();
+				search.select();
+			}
+		}
+		catch (error: unknown) { error_text(error); }
+
+		return;
+	}
+
 	if (event.key !== "Escape" || document.body.classList.contains("collapsed"))
 		return;
 
@@ -1280,11 +1550,28 @@ document.addEventListener("keydown", (event: KeyboardEvent): void =>
 	element("open").focus();
 });
 let resize_timer: ReturnType<typeof setTimeout> | undefined;
+function resize_canvas(): void
+{
+	const [width, height] = size();
+	if (scene?.rendering.canvas_size[0] === width && scene.rendering.canvas_size[1] === height)
+		return;
+
+	if (rendering || gesture || exporting)
+	{
+		resize_timer = setTimeout(resize_canvas, 100);
+
+		return;
+	}
+
+	void render(document_value);
+}
+
 new ResizeObserver((): void =>
 {
 	clearTimeout(resize_timer);
-	resize_timer = setTimeout((): void => { void render(document_value); }, 160);
+	resize_timer = setTimeout(resize_canvas, 160);
 }).observe(element("stage"));
 window.addEventListener("pagehide", (): void => { core.dispose(); plot.dispose(); });
 panel();
+configure_picker(element("document-picker"));
 void initialize();
