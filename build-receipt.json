@@ -15,5 +15,5 @@
   ],
   "build_platform": "windows-x64",
   "emsdk_commit": "c0bb220cb6e6f4e0fabb6f6db9efd53390ef5e56",
-  "web_commit": "73e72cce33f263200ccf24f00a7eb709fe0d9d52"
+  "web_commit": "c333301c8a0fdf119457be790a7b8f83aaa7f886"
 }
