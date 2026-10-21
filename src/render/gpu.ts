@@ -360,23 +360,18 @@ export class GpuPlot
 		}
 
 		const wire: number[] = [];
-		const wire_edges: Set<string> = new Set();
-		if (data.rendering.surface)
+		if (!data.cells.length && data.rendering.surface)
 			for (const [begin, end] of data.rendering.surface.wireframe_indices)
 				wire.push(...data.vertices[begin]!.position, ...data.vertices[end]!.position);
-		else for (const triangle of data.triangles)
-			for (let i: number = 0; i < 3; ++i)
-			{
-				const begin: number = triangle[i]!, end: number = triangle[(i + 1) % 3]!;
-				const key: string = `${Math.min(begin, end)}:${Math.max(begin, end)}`;
-				if (wire_edges.has(key))
-					continue;
 
-				wire_edges.add(key);
-				wire.push(...data.vertices[begin]!.position, ...data.vertices[end]!.position);
-			}
+		const wire_mesh = this.lines(wire, data.style.wireframe, 1);
+		if (wire_mesh)
+		{
+			// 불투명 선도 반투명 곡면 뒤에 합성, 깊이 검사는 유지하며 지정 RGB 보존
+			wire_mesh.material.transparent = true;
+			wire_mesh.renderOrder = 1;
+		}
 
-		this.lines(wire, data.style.wireframe, 1);
 		this.canvas.dataset.wireSegments = String(wire.length / 6);
 		this.canvas.dataset.sourceTriangles = String(data.triangles.length);
 		const segments: number[] = [];

@@ -5,6 +5,7 @@
 - core.lock.json의 고정 커밋과 runtime.lock.json의 SHA-256 보존
 - 수학/집계/기하/테마/투영은 실제 fgv::core 호출, JS 수학 재구현 금지
 - 원본 샘플/ID/범위와 표시 LOD 분리, 결측 구간 연결 금지
+- 와이어프레임은 함수/데이터 곡면만 생성, 히스토그램의 삼각형 모서리 추출/대체선 생성 금지
 - 페이지 전체 작업 공간, GV와 같은 레일/접이식 패널/나머지 캔버스, docs/workspace-ui.md 유지
 - 공통 토큰은 src/workspace.css, UI/기본 라벨 Pretendard와 OFL/해시 고지 유지
 - 스타일 자동 반영 시 입력 폼 재생성/포커스 손실 금지, JSON/수식 고정폭 유지

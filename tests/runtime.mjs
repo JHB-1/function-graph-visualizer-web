@@ -50,6 +50,27 @@ test('uniform intervals and count/sum/mean, empty mean', () =>
 	const value = scene({ ...base, rows: [[0, 1, 2]], kind: 'histogram', histogram: { ...histogram, mode: 'mean' } });
 	assert.deepEqual(value.cells.map((v) => v.value), [1, null, null]);
 });
+test('histograms never generate surface wireframes, including incremental and empty results', () =>
+{
+	for (const axes of [[{ column: 0, uniform: { lower: 0, upper: 3, step: 1 } }],
+		[{ column: 0, uniform: { lower: 0, upper: 3, step: 1 } },
+		{ column: 2, uniform: { lower: 0, upper: 9, step: 3 } }]])
+		for (const rows of [base.rows, []])
+			for (const history of [[], [{ append: [[1, 2, 3]] }]])
+			{
+				const value = scene({ ...base, kind: 'histogram', rows,
+					surface_rendering: { wireframe: 'triangles' },
+					histogram: { axes, mode: 'mean', value_column: 1 } }, history);
+				assert.equal(value.rendering.surface, undefined);
+				assert.deepEqual(value.wireframe, []);
+				assert.deepEqual(value.rendering.segment_indices, []);
+			}
+
+	const value = scene({ ...base, plot: 'surface', columns: [0, 1, 2],
+		rows: [[0, 0, 0], [1, 0, 1], [0, 1, 1], [1, 1, 2]], grid: { u_count: 2, v_count: 2 } });
+	assert.equal(value.rendering.surface.wireframe_indices.length, 5);
+	assert.equal(value.wireframe.length, 5);
+});
 test('incremental IDs, changed deltas, rejection preserves replayable original', () =>
 {
 	const history = [{ erase: [1], append: [[3, 7, 8]] }, { replace: [{ row_id: 2, values: [2, 9, 6] }] }];

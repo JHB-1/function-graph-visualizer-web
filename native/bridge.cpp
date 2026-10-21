@@ -678,17 +678,20 @@ namespace fgv_web
 		for (const fgv::line3& line : frame.grid_lines)
 			result["rendering"]["grid_lines"].push_back({ { "origin", encode(line.origin) }, { "direction", encode(line.direction) } });
 
-		const bool surface = kind == "function" and sampling_axes.size() == 2;
-		result["rendering"]["surface"] = fgv_plugin::surface_rendering
-		(
-			scene.geometry,
-			surface ? sampling_axes[0].at("count").get<std::size_t>() : 0,
-			surface ? sampling_axes[1].at("count").get<std::size_t>() : 0,
-			spec.value("surface_rendering", json::object())
-		);
+		const bool function_surface = kind == "function" and sampling_axes.size() == 2;
+		const bool surface = function_surface or (kind == "dataset" and spec.value("plot", "curve") == "surface");
+
+		// 막대 면에서 와이어프레임 생성 금지, PNG 소비자의 삼각형 모서리 대체도 차단
+		result["wireframe"] = json::array();
 		if (surface)
 		{
-			result["wireframe"] = json::array();
+			result["rendering"]["surface"] = fgv_plugin::surface_rendering
+			(
+				scene.geometry,
+				function_surface ? sampling_axes[0].at("count").get<std::size_t>() : 0,
+				function_surface ? sampling_axes[1].at("count").get<std::size_t>() : 0,
+				spec.value("surface_rendering", json::object())
+			);
 			for (const auto& segment : result["rendering"]["surface"]["wireframe_indices"])
 				result["wireframe"].push_back
 				(

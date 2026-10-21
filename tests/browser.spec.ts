@@ -7,6 +7,66 @@ async function ready(page: Page): Promise<void>
 	await expect(page.locator("#error")).toBeEmpty();
 	await page.evaluate(async (): Promise<void> => { await document.fonts.ready; });
 }
+
+async function magenta_pixels(page: Page): Promise<number>
+{
+	return page.locator("#graph").evaluate
+	(
+		(canvas: HTMLCanvasElement): number =>
+		{
+			const gl: WebGL2RenderingContext = canvas.getContext("webgl2")!;
+			const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+			gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+			let count: number = 0;
+			for (let i: number = 0; i < pixels.length; i += 4)
+				if (pixels[i]! > 200 && pixels[i + 1]! < 60 && pixels[i + 2]! > 200)
+					++count;
+
+			return count;
+		},
+	);
+}
+
+test('surface wireframe color and alpha reach pixels, histograms have no wireframe', async ({ page }: { page: Page }): Promise<void> =>
+{
+	await page.goto('./');
+	await ready(page);
+	for (const index of [0, 6])
+	{
+		if (index === 6)
+		{
+			await page.locator("#preset").selectOption(String(index));
+			await expect(page.locator("#graph")).toHaveAttribute("data-source-triangles", "128");
+		}
+
+		await expect.poll(async (): Promise<number> => Number(await page.locator("#graph").getAttribute("data-wire-segments")))
+			.toBeGreaterThan(0);
+		await page.getByRole("tab", { name: "스타일", exact: true }).click();
+		await page.getByLabel("와이어프레임 색상", { exact: true }).evaluate
+		(
+			(input: HTMLInputElement): void =>
+			{
+				input.value = "#ff00ff";
+				input.dispatchEvent(new Event("input", { bubbles: true }));
+			},
+		);
+		await expect.poll(async (): Promise<number> => magenta_pixels(page)).toBeGreaterThan(100);
+		await page.screenshot({ path: `test-results/wireframe-color-${index}.png` });
+		await page.getByLabel("와이어프레임 알파", { exact: true }).fill("0");
+		await expect.poll(async (): Promise<number> => magenta_pixels(page)).toBe(0);
+	}
+
+	for (const index of [7, 8])
+	{
+		await page.locator("#preset").selectOption(String(index));
+		await expect(page.locator("#graph")).toHaveAttribute("data-wire-segments", "0");
+		await expect.poll(async (): Promise<number> => Number(await page.locator("#graph").getAttribute("data-source-triangles")))
+			.toBeGreaterThan(0);
+		await page.getByRole("tab", { name: "스타일", exact: true }).click();
+		await expect(page.getByLabel("와이어프레임 색상", { exact: true })).toHaveCount(0);
+		await page.screenshot({ path: `test-results/histogram-no-wire-${index}.png` });
+	}
+});
 test('every preset renders, full-screen resize and categories', async ({ page }: { page: Page }): Promise<void> =>
 {
 	const errors: string[] = [];

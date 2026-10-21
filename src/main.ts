@@ -478,9 +478,14 @@ function panel(): void
 		const patch: ObjectValue = overrides(draft);
 		const style: ObjectValue = object(patch.style ?? {});
 		patch.style = style;
+		const surface: boolean = draft.kind === "function" ? object(draft.sampling).axes instanceof Array &&
+			(object(draft.sampling).axes as unknown[]).length === 2 : draft.kind === "dataset" && draft.plot === "surface";
 		for (const [key, label] of Object.entries({ background: "배경", grid: "격자", axes: "공통 축", stroke: "곡선",
-			points: "데이터 점", surface: "곡면", wireframe: "곡면 격자", bars: "히스토그램 막대", text: "일반 글자" }))
+			points: "데이터 점", surface: "곡면", wireframe: "와이어프레임", bars: "히스토그램 막대", text: "일반 글자" }))
 		{
+			if (key === "wireframe" && !surface)
+				continue;
+
 			const fallback: unknown = key === "axes" ? [128, 128, 128, 255] : scene?.style[key as keyof SceneData["style"]];
 			const rgba: number[] = z.array(z.number()).length(4).parse(style[key] ?? fallback ?? [128, 128, 128, 255]);
 			const wrap: HTMLLabelElement = document.createElement("label");

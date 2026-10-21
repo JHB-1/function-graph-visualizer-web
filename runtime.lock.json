@@ -10,7 +10,7 @@
     {
       "name": "fgv-runtime.wasm",
       "url": "https://raw.githubusercontent.com/JHB-1/function-graph-visualizer-web/6425b8b0a82f8ba5e72f7b385466d957f03a1e0c/runtime/fgv-runtime.wasm",
-      "sha256": "cf7c29a657f52549aacca57afe7b6d8e69637c709672dd4db8e8881824bc9572"
+      "sha256": "1fc8a80f3bf983e43ff945dc025e12977e5c8beee4974404efe3107794a0634f"
     }
   ]
 }
