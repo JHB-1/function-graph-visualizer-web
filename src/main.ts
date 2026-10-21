@@ -39,6 +39,8 @@ rel="noopener noreferrer" aria-label="GitHub 저장소">↗</a></nav>
 <button id="open" aria-label="조작부 열기" aria-controls="sidebar" aria-expanded="false">☰</button>
 <button id="zoom-out" aria-label="축소">−</button><span id="zoom-level" aria-live="off">100%</span>
 <button id="zoom-in" aria-label="확대">＋</button><button id="reset" aria-label="그래프 맞춤">맞춤</button></div>
+<label id="touch_controls">터치 조작 <select id="drag_mode" aria-label="Touch drag mode">
+<option value="orbit">회전</option><option value="pan">이동</option></select></label>
 <div id="hud" class="canvas-caption">왼쪽 이동 <span>·</span> 오른쪽 회전 <span>·</span> 휠 확대</div>
 <div id="error" role="alert"></div></main></div>
 <input id="document-picker" type="file" accept=".json,application/json" hidden>`;
@@ -102,7 +104,7 @@ let scene: SceneData | undefined;
 let sequence: number = 0;
 let tab: string = "input";
 let read_fields: () => ObjectValue = (): ObjectValue => structuredClone(document_value.spec);
-let gesture: { x: number; y: number; button: number; state: State } | undefined;
+let gesture: { pointer_id: number; x: number; y: number; button: number; state: State } | undefined;
 let changed: boolean = false;
 let sync_timer: ReturnType<typeof setTimeout> | undefined;
 let style_timer: ReturnType<typeof setTimeout> | undefined;
@@ -420,6 +422,7 @@ async function render(candidate: DocumentValue, rebuild: boolean = false, rememb
 		items = next_items;
 		canvas.dataset.ready = "true";
 		canvas.dataset.dimension = String(next_scene.dimension);
+		element<HTMLSelectElement>("drag_mode").disabled = next_scene.dimension !== 3;
 		canvas.dataset.revision = String(result.host_revision ?? result.cache_revision);
 		element("status").textContent = `${next_scene.dimension}D · ${next_scene.vertices.length.toLocaleString()} 정점 · ` +
 			`${next_scene.triangles.length.toLocaleString()} 면 · revision ${result.host_revision ?? result.cache_revision}`;
@@ -1305,11 +1308,13 @@ canvas.onpointerdown = (event: PointerEvent): void =>
 	element("item-marker").hidden = true;
 	++sequence;
 	rendering = false;
-	gesture = { x: event.clientX, y: event.clientY, button: event.button, state: structuredClone(state) };
+	const button: number = event.pointerType === "touch" && state.dimension === 3 &&
+		element<HTMLSelectElement>("drag_mode").value === "orbit" ? 2 : event.button;
+	gesture = { pointer_id: event.pointerId, x: event.clientX, y: event.clientY, button, state: structuredClone(state) };
 };
 canvas.onpointermove = (event: PointerEvent): void =>
 {
-	if (!gesture || !state)
+	if (!gesture || !state || gesture.pointer_id !== event.pointerId)
 		return;
 
 	const dx: number = (event.clientX - gesture.x) / canvas.getBoundingClientRect().width;
@@ -1349,14 +1354,24 @@ canvas.onpointermove = (event: PointerEvent): void =>
 };
 canvas.onpointerup = (event: PointerEvent): void =>
 {
-	if (gesture)
+	if (gesture?.pointer_id === event.pointerId)
 	{
 		gesture = undefined;
-		canvas.releasePointerCapture(event.pointerId);
+		if (canvas.hasPointerCapture(event.pointerId))
+			canvas.releasePointerCapture(event.pointerId);
+
 		commit_view();
 	}
 };
-canvas.onpointercancel = (): void => { gesture = undefined; commit_view(); };
+canvas.onpointercancel = (event: PointerEvent): void =>
+{
+	if (gesture?.pointer_id === event.pointerId)
+	{
+		gesture = undefined;
+		void commit_view();
+	}
+};
+canvas.onlostpointercapture = canvas.onpointercancel;
 function scale_view(factor: number): void
 {
 	if (!state)
@@ -1412,7 +1427,7 @@ function animate(): void
 	if (disposed)
 		return;
 
-	if (changed)
+	if (changed || gesture)
 	{
 		plot.draw();
 		changed = false;

@@ -319,6 +319,8 @@ export class GpuPlot
 
 		this.clear();
 		this.data = data;
+		this.canvas.dataset.camera = JSON.stringify(state.camera);
+		this.canvas.dataset.view = JSON.stringify(state.view);
 		this.canvas.dataset.gridLines = String(data.rendering.grid_lines.length);
 		[this.buffer_width, this.buffer_height] = data.rendering.canvas_size;
 		this.renderer.setSize(this.buffer_width, this.buffer_height, false);
