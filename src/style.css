@@ -121,6 +121,22 @@ pre { font: 10px/1.65 Consolas, monospace; color: var(--muted); overflow-wrap: a
 #export-toggle { width: 100%; }
 #export-menu { background: var(--field); padding: 5px; margin-top: 5px; border: 1px solid var(--edge); border-radius: 5px; }
 #export-menu button { width: 100%; text-align: left; background: transparent; border: 0; }
+#document-status { margin-top: 8px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+#recovery
+{
+	position: absolute; z-index: 5; top: 70px; left: 16px; max-width: calc(100% - 32px);
+	padding: 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--panel); box-shadow: 0 4px 16px #0002;
+}
+#recovery p { margin: 0 0 8px; color: var(--text); }
+#recovery button { margin-right: 6px; }
+.item-list { display: flex; flex-direction: column; gap: 5px; }
+.item-list button { width: 100%; text-align: left; overflow-wrap: anywhere; }
+.item-list [aria-pressed=true] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+#item-marker
+{
+	position: absolute; z-index: 2; width: 14px; height: 14px; transform: translate(-50%, -50%);
+	border: 2px solid #ffb000; border-radius: 50%; box-shadow: 0 0 0 2px #0008; pointer-events: none;
+}
 @media (max-width: 700px)
 {
 	:root { --workspace-rail-width: 48px; }

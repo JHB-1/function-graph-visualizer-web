@@ -41,3 +41,14 @@ Pretendard 실제 FontFace 로드, Canvas 라벨 font-family, JSON/수식 고정
 strict TypeScript/production build와 실제 브라우저 4/4, 기존 WASM 테스트 9/9 통과입니다.
 실제 데스크톱/모바일 크기 PNG를 열어 공통 셸과 그래프 표시를 확인했습니다.
 현재 Codex 인라인 위젯이나 private plugin/desktop 설치본을 이 변경으로 갱신하지 않았습니다.
+
+## 공통 파일/복구/탐색, 2026-10-21
+
+core/WASM 변경 없이 기존 spec/history 문서 입출력과 브라우저 작업 공간만 확장했습니다.
+strict TypeScript/production build, 실제 WASM 10/10과 Chrome 회귀 10/10 통과입니다.
+문서 원본 ID/이력 왕복, 잘못된 버전/행/ID·1MiB 초과 거절과 기존 문서 보존,
+드롭/새 문서/교체 취소, 복구 선택 전 반복 새로고침/복구/버리기/기록 삭제를 검사했습니다.
+저장소 접근 실패 시에도 현재 기하를 유지하고 오류 상태를 표시합니다.
+탭 복제 시 Web Locks로 키 충돌을 피하고 다른 탭 기록이 버리기/OFF로 삭제되지 않음을 확인했습니다.
+항목은 현재 그래프/원본 행 ID/샘플/셀만 사용하며 100개 페이지와 선택/위치 찾기를 제공합니다.
+이 웹 확장은 이번에 별도로 검증한 plugin 0732616/desktop f20624d 고정을 변경하지 않습니다.

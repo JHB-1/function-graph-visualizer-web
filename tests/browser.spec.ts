@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Dialog, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
 async function ready(page: Page): Promise<void>
@@ -29,6 +29,7 @@ async function magenta_pixels(page: Page): Promise<number>
 
 test('surface wireframe color and alpha reach pixels, histograms have no wireframe', async ({ page }: { page: Page }): Promise<void> =>
 {
+	page.on("dialog", async (dialog: Dialog): Promise<void> => { await dialog.accept(); });
 	await page.goto('./');
 	await ready(page);
 	for (const index of [0, 6])

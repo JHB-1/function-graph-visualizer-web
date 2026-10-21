@@ -3,6 +3,8 @@ import { CoreClient, object, type ObjectValue } from "./engine/client";
 import { parse_expression } from "./engine/expression";
 import { GpuPlot, scene_schema, type SceneData, type ViewState } from "./render/gpu";
 import { presets } from "./presets";
+import { parse_document, parse_recovery, read_recovery, store_recovery, document_limit,
+	type DocumentValue, type RecoveryRecord } from "./document";
 import "./style.css";
 
 const app: HTMLElement = document.querySelector("#app")!;
@@ -18,7 +20,8 @@ rel="noopener noreferrer" aria-label="GitHub 저장소">↗</a></nav>
 <aside id="sidebar" class="sidebar" aria-label="그래프 조작부">
 <header class="sidebar-heading"><div><h1>Function Graph Visualizer</h1><span>WORKSPACE</span></div>
 <button id="fold" aria-label="조작부 접기" aria-controls="sidebar" aria-expanded="true">‹</button></header>
-<div class="preset-row"><label for="preset">예제</label><select id="preset" aria-label="예제 선택"></select></div>
+<div class="preset-row"><label for="preset">예제</label><select id="preset" aria-label="예제 선택"></select>
+<div id="document-status" role="status" aria-live="polite"></div></div>
 <section id="content" class="sidebar-body" role="tabpanel" aria-labelledby="tab-input" tabindex="0"></section>
 <div class="panel-actions"><button id="apply" class="primary">변경 적용</button></div>
 <footer class="sidebar-status"><span id="pulse" aria-hidden="true">●</span>
@@ -26,6 +29,9 @@ rel="noopener noreferrer" aria-label="GitHub 저장소">↗</a></nav>
 <main id="stage" aria-label="그래프 작업 공간">
 <canvas id="graph" tabindex="0" role="img" aria-label="2D/3D 그래프, 왼쪽 이동, 오른쪽 회전, 휠 확대"></canvas>
 <canvas id="labels" aria-hidden="true"></canvas>
+<div id="item-marker" hidden aria-hidden="true"></div>
+<section id="recovery" aria-label="작업 복구" hidden><p>이전 작업을 복구할까요?</p>
+<button id="recover">복구</button><button id="discard">버리기</button></section>
 <div class="canvas-controls" role="group" aria-label="관찰 조작">
 <button id="open" aria-label="조작부 열기" aria-controls="sidebar" aria-expanded="false">☰</button>
 <button id="zoom-out" aria-label="축소">−</button><span id="zoom-level" aria-live="off">100%</span>
@@ -50,8 +56,23 @@ const state_schema = z.object
 		orthographic_width: z.number(), orthographic_height: z.number() }),
 });
 type State = z.infer<typeof state_schema>;
-interface DocumentValue { spec: ObjectValue; history: ObjectValue[] }
 let document_value: DocumentValue = { spec: structuredClone(presets[0]!.spec), history: [] };
+let document_name: string = "새 문서";
+let baseline: string = JSON.stringify(document_value);
+let pending_fields: boolean = false;
+let storage_message: string = "자동 저장 준비 중";
+let autosave: boolean = true;
+let recovery_pending: boolean = false;
+let recovery: RecoveryRecord | undefined;
+let save_timer: ReturnType<typeof setTimeout> | undefined;
+let save_epoch: number = 0;
+let initialized: boolean = false;
+let selected_item: string | undefined;
+interface Item { id: string; label: string; position?: number[]; screen?: number[] | null }
+let items: Item[] = [];
+let item_query: string = "";
+let item_page: number = 0;
+let current_preset: string = "0";
 let state: State | undefined;
 let output: ObjectValue | undefined;
 let scene: SceneData | undefined;
@@ -66,6 +87,105 @@ let zoom_reference: State | undefined;
 const system_theme: MediaQueryList = matchMedia("(prefers-color-scheme: dark)");
 let dark: boolean = system_theme.matches;
 let manual_theme: boolean = false;
+
+function dirty(): boolean
+{
+	return pending_fields || JSON.stringify(document_value) !== baseline;
+}
+
+function document_status(): void
+{
+	element("document-status").textContent = `${document_name} · ${dirty() ? "미저장" : "변경 없음"} · ${storage_message}`;
+}
+
+function schedule_save(): void
+{
+	clearTimeout(save_timer);
+	const epoch: number = ++save_epoch;
+	if (!autosave || recovery_pending || !initialized)
+	{
+		document_status();
+
+		return;
+	}
+
+	storage_message = "저장 중…";
+	document_status();
+	save_timer = setTimeout
+	(
+		(): void =>
+		{
+			const record: RecoveryRecord = { version: 1, name: document_name, document: structuredClone(document_value) };
+			store_recovery(record).then
+			(
+				(): void =>
+				{
+					if (epoch !== save_epoch || !autosave)
+						return;
+
+					storage_message = "자동 저장됨";
+					document_status();
+				},
+				(error: unknown): void =>
+				{
+					if (epoch !== save_epoch)
+						return;
+
+					storage_message = `자동 저장 실패: ${String(error)}`;
+					document_status();
+				},
+			);
+		}, 300,
+	);
+}
+
+async function clear_local_record(all: boolean = false): Promise<void>
+{
+	clearTimeout(save_timer);
+	++save_epoch;
+	await store_recovery(undefined, all);
+	recovery = undefined;
+	recovery_pending = false;
+	element("recovery").hidden = true;
+	storage_message = autosave ? "로컬 기록 없음" : "자동 저장 꺼짐";
+	document_status();
+}
+
+async function replace_document(candidate: DocumentValue, name: string): Promise<boolean>
+{
+	if (dirty() && !confirm("저장하지 않은 변경 사항을 버리고 문서를 교체할까요?"))
+		return false;
+
+	if (!await render(candidate, true))
+		return false;
+
+	document_name = name;
+	baseline = JSON.stringify(document_value);
+	pending_fields = false;
+	selected_item = undefined;
+	item_query = "";
+	item_page = 0;
+	current_preset = "";
+	preset.value = "";
+	zoom_reference = state ? structuredClone(state) : undefined;
+	zoom_label();
+	update_marker();
+	if (tab === "items")
+		panel();
+
+	schedule_save();
+
+	return true;
+}
+
+async function open_file(file: File): Promise<void>
+{
+	if (file.size > document_limit)
+		throw new Error("문서 파일 상한은 1 MiB입니다.");
+
+	const candidate: DocumentValue = parse_document(await file.text());
+	await replace_document(candidate, file.name);
+}
 
 function error_text(error: unknown): void
 {
@@ -151,21 +271,31 @@ async function render(candidate: DocumentValue, rebuild: boolean = false): Promi
 
 		const next_scene: SceneData = scene_schema.parse(result);
 		const next_state: State = state_schema.parse(result);
+		const next_items: Item[] = make_items(result, next_scene, candidate.spec);
 		plot.load(next_scene, next_state);
 		plot.set_theme(dark);
+		const edited: boolean = JSON.stringify(document_value) !== JSON.stringify(candidate);
 		document_value = structuredClone(candidate);
+		if (edited || rebuild)
+			pending_fields = false;
 		state = next_state;
 		zoom_reference ??= structuredClone(next_state);
 		zoom_label();
 		output = result;
 		scene = next_scene;
+		items = next_items;
 		canvas.dataset.ready = "true";
 		canvas.dataset.dimension = String(next_scene.dimension);
 		canvas.dataset.revision = String(result.cache_revision);
 		element("status").textContent = `${next_scene.dimension}D · ${next_scene.vertices.length.toLocaleString()} 정점 · ` +
 			`${next_scene.triangles.length.toLocaleString()} 면 · revision ${result.cache_revision}`;
-		if (rebuild)
+		if (rebuild || tab === "items")
 			panel();
+		update_marker();
+		if (edited)
+			schedule_save();
+		else
+			document_status();
 
 		return true;
 	}
@@ -299,7 +429,12 @@ function file_menu(): void
 	const choices: Array<[string, () => void | Promise<void>]> =
 	[
 		["이미지 파일로 출력 (.png)", export_png],
-		["그래프 문서로 출력 (.json)", (): void => download("graph.fgv.json", JSON.stringify(document_value, null, 2))],
+		["그래프 문서로 출력 (.json)", (): void =>
+		{
+			download("graph.fgv.json", JSON.stringify(document_value, null, 2));
+			baseline = JSON.stringify(document_value);
+			document_status();
+		}],
 		["raw 데이터로 출력 (.json)", (): void =>
 		{
 			const raw: ObjectValue = structuredClone(document_value.spec);
@@ -594,22 +729,105 @@ function panel(): void
 			last_delta: output?.last_delta, cells: output?.cells }, null, 2);
 		content.append(pre);
 	}
+	else if (tab === "items")
+	{
+		heading
+		(
+			"항목",
+			"현재 그래프와 원본 행 ID, 함수 샘플 또는 히스토그램 셀을 검색합니다. " +
+			"선택 후 위치 찾기로 관찰 중심을 옮깁니다.",
+		);
+		const search = field("이름·ID 검색", item_query) as HTMLInputElement;
+		search.type = "search";
+		const summary: HTMLParagraphElement = document.createElement("p");
+		const list: HTMLDivElement = document.createElement("div");
+		list.className = "item-list";
+		list.setAttribute("role", "group");
+		list.setAttribute("aria-label", "항목 목록");
+		content.append(summary, list);
+		const draw_list = (): void =>
+		{
+			const query: string = item_query.trim().toLocaleLowerCase();
+			const found: Item[] = items.filter((item: Item): boolean => `${item.id} ${item.label}`.toLocaleLowerCase().includes(query));
+			const start: number = item_page * 100;
+			summary.textContent = `${found.length}개 항목 · ${item_page + 1}/${Math.max(1, Math.ceil(found.length / 100))} 페이지`;
+			list.replaceChildren();
+			for (const item of found.slice(start, start + 100))
+			{
+				const control: HTMLButtonElement = document.createElement("button");
+				control.textContent = `${item.label} · ${item.id}`;
+				control.dataset.itemId = item.id;
+				control.setAttribute("aria-pressed", String(selected_item === item.id));
+				control.onclick = (): void =>
+				{
+					selected_item = item.id;
+					update_marker();
+					draw_list();
+					list.querySelector<HTMLButtonElement>(`[data-item-id="${CSS.escape(item.id)}"]`)?.focus();
+				};
+				list.append(control);
+			}
+		};
+		search.oninput = (): void => { item_query = search.value; item_page = 0; draw_list(); };
+		button("이전 페이지", (): void => { item_page = Math.max(0, item_page - 1); draw_list(); });
+		button("다음 페이지", (): void =>
+		{
+			const count: number = items.filter((item: Item): boolean =>
+				`${item.id} ${item.label}`.toLocaleLowerCase().includes(item_query.trim().toLocaleLowerCase())).length;
+			item_page = Math.min(Math.max(0, Math.ceil(count / 100) - 1), item_page + 1);
+			draw_list();
+		});
+		button("위치 찾기", locate_item);
+		draw_list();
+	}
 	else if (tab === "document")
 	{
 		heading("문서 · 테마", "raw 입력과 표시 정보를 포함한 문서를 모두 받습니다. .fgvtheme은 실제 코어가 읽고 정규화합니다. 명시 override는 프로파일 기본값보다 우선합니다.");
+		button("새 문서", async (): Promise<void> =>
+		{
+			await replace_document({ spec: { kind: "dataset", dimension_count: 2, rows: [], columns: [0, 1], plot: "points" },
+				history: [] }, "새 문서");
+		});
+		const file: HTMLInputElement = document.createElement("input");
+		file.type = "file";
+		file.accept = ".json,application/json";
+		file.setAttribute("aria-label", "파일 열기 (.json)");
+		file.onchange = (): void =>
+		{
+			const selected: File | undefined = file.files?.[0];
+			if (selected)
+				void open_file(selected).catch((error: unknown): void => error_text(error));
+
+			file.value = "";
+		};
+		content.append(file);
+		const save = check("자동 저장", autosave);
+		save.onchange = (): void =>
+		{
+			autosave = save.checked;
+			try { sessionStorage.setItem("fgv-autosave", String(autosave)); }
+			catch (error: unknown) { error_text(error); }
+			if (autosave)
+				schedule_save();
+			else
+				void clear_local_record().catch((error: unknown): void =>
+				{
+					storage_message = `로컬 기록 삭제 실패: ${String(error)}`;
+					document_status();
+				});
+		};
+		button("로컬 기록 지우기", async (): Promise<void> =>
+		{
+			if (confirm("FGV의 모든 탭에서 저장한 로컬 기록을 지울까요?"))
+				await clear_local_record(true);
+		});
 		const editor = json_field("전체 웹 호스트 문서 · spec / history", document_value);
 		editor.className = "long";
 		button("문서 적용", async (): Promise<void> =>
 		{
-			const value: ObjectValue = object(JSON.parse(editor.value));
-			await render({ spec: object(value.spec ?? value), history: z.array(z.record(z.string(), z.unknown())).parse(value.history ?? []) }, true);
+			await render(parse_document(editor.value), true);
 		});
 		file_menu();
-		upload("문서 / raw JSON 열기", ".json", async (text: string): Promise<void> =>
-		{
-			const value: ObjectValue = object(JSON.parse(text));
-			await render({ spec: object(value.spec ?? value), history: z.array(z.record(z.string(), z.unknown())).parse(value.history ?? []) }, true);
-		});
 		const theme_editor = field(".fgvtheme 프로파일", String(draft.theme ?? "fgv-theme 1\n"), true);
 		button("테마 검증·적용", async (): Promise<void> =>
 		{
@@ -654,7 +872,7 @@ function panel(): void
 	}
 }
 
-const tabs: Array<[string, string, string]> = [["input", "입력", "⌘"], ["style", "스타일", "◐"],
+const tabs: Array<[string, string, string]> = [["input", "입력", "⌘"], ["style", "스타일", "◐"], ["items", "항목", "☷"],
 	["axes", "축·범위", "⌁"], ["camera", "관찰", "◇"], ["stream", "증분", "⇄"],
 	["diagnostics", "진단", "⋈"], ["document", "파일", "▤"]];
 function select_tab(id: string): void
@@ -728,6 +946,19 @@ function schedule_style(): void
 }
 content.addEventListener("input", schedule_style);
 content.addEventListener("change", schedule_style);
+content.addEventListener
+(
+	"input", (event: Event): void =>
+	{
+		if (!["input", "style", "axes", "camera", "document"].includes(tab) ||
+			!(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) ||
+			event.target.type === "file" || event.target.type === "checkbox")
+			return;
+
+		pending_fields = true;
+		document_status();
+	},
+);
 const preset: HTMLSelectElement = element("preset");
 for (const [index, entry] of presets.entries())
 {
@@ -735,10 +966,14 @@ for (const [index, entry] of presets.entries())
 	option.value = String(index); option.textContent = entry.name; preset.append(option);
 }
 
-preset.onchange = (): void =>
+preset.onchange = async (): Promise<void> =>
 {
-	zoom_reference = undefined;
-	void render({ spec: structuredClone(presets[Number(preset.value)]!.spec), history: [] }, true);
+	const chosen: string = preset.value;
+	const entry = presets[Number(chosen)]!;
+	if (await replace_document({ spec: structuredClone(entry.spec), history: [] }, entry.name))
+		current_preset = chosen;
+
+	preset.value = current_preset;
 };
 element("apply").onclick = (): void =>
 {
@@ -795,6 +1030,7 @@ canvas.onpointerdown = (event: PointerEvent): void =>
 		return;
 
 	canvas.setPointerCapture(event.pointerId);
+	element("item-marker").hidden = true;
 	++sequence;
 	gesture = { x: event.clientX, y: event.clientY, button: event.button, state: structuredClone(state) };
 };
@@ -854,6 +1090,7 @@ function zoom_by(factor: number): void
 		return;
 
 	++sequence;
+	element("item-marker").hidden = true;
 	if (state.dimension === 2)
 		for (let axis: number = 0; axis < 2; ++axis)
 		{
@@ -898,6 +1135,140 @@ function animate(): void
 
 	requestAnimationFrame(animate);
 }
+
+function make_items(result: ObjectValue, geometry: SceneData, spec: ObjectValue): Item[]
+{
+	const vertices = z.array(z.object({ source_index: z.number().int(), position: z.array(z.number()).length(3),
+		screen: z.array(z.number()).length(3).nullable() })).parse(result.vertices);
+	const positions = new Map(vertices.map((vertex: typeof vertices[number]): [number, typeof vertex] => [vertex.source_index, vertex]));
+	const entries: Item[] = [{ id: "graph", label: geometry.title }];
+	if (spec.kind === "histogram")
+		for (const [index, cell] of z.array(z.object({ count: z.number(), value: z.number().nullable() })).parse(result.cells).entries())
+			entries.push({ id: `cell:${index}`, label: `셀 ${index} · 개수 ${cell.count} · 값 ${cell.value ?? "없음"}`,
+				...positions.get(index) });
+	else if (spec.kind === "function")
+		for (const vertex of vertices)
+			entries.push({ id: `sample:${vertex.source_index}`, label: `샘플 ${vertex.source_index}`, ...vertex });
+	else
+		for (const id of z.array(z.number().int()).parse(result.row_ids))
+			entries.push({ id: `row:${id}`, label: `행 ${id}`, ...positions.get(id) });
+
+	return entries;
+}
+
+function update_marker(): void
+{
+	const marker: HTMLElement = element("item-marker");
+	const item: Item | undefined = items.find((entry: Item): boolean => entry.id === selected_item);
+	marker.hidden = !item?.screen;
+	if (!item?.screen)
+		return;
+
+	const area: DOMRect = canvas.getBoundingClientRect();
+	marker.style.left = `${item.screen[0]! * area.width / canvas.width}px`;
+	marker.style.top = `${item.screen[1]! * area.height / canvas.height}px`;
+}
+
+function locate_item(): void
+{
+	const item: Item | undefined = items.find((entry: Item): boolean => entry.id === selected_item);
+	if (!item || !state)
+		throw new Error("항목을 먼저 선택하세요.");
+
+	if (item.id === "graph")
+		return element("reset").click();
+
+	if (!item.position)
+		throw new Error("이 항목에는 표시할 좌표가 없습니다.");
+
+	const point: number[] = item.position;
+	if (state.dimension === 2)
+		for (let axis: number = 0; axis < 2; ++axis)
+		{
+			const offset: number = point[axis]! - (state.view.lower[axis]! + state.view.upper[axis]!) / 2;
+			state.view.lower[axis]! += offset;
+			state.view.upper[axis]! += offset;
+		}
+	else
+		for (let axis: number = 0; axis < 3; ++axis)
+		{
+			state.camera.eye[axis]! += point[axis]! - state.camera.target[axis]!;
+			state.camera.target[axis] = point[axis]!;
+		}
+
+	commit_view();
+}
+
+async function initialize(): Promise<void>
+{
+	try
+	{
+		autosave = sessionStorage.getItem("fgv-autosave") !== "false";
+		const stored: unknown = await read_recovery();
+		recovery_pending = autosave && stored !== undefined;
+		if (recovery_pending)
+		{
+			element("recovery").hidden = false;
+			storage_message = "복구 선택 대기";
+			recovery = parse_recovery(stored);
+		}
+		else
+		{
+			storage_message = autosave ? "자동 저장 대기" : "자동 저장 꺼짐";
+			if (!autosave)
+				await store_recovery(undefined);
+		}
+	}
+	catch (error: unknown)
+	{
+		storage_message = `로컬 저장소 오류: ${String(error)}`;
+	}
+
+	initialized = true;
+	element<HTMLButtonElement>("recover").disabled = !recovery;
+	document_status();
+	await render(document_value, true);
+}
+
+element("recover").onclick = (): void =>
+{
+	if (!recovery)
+		return;
+
+	const candidate: RecoveryRecord = recovery;
+	void (async (): Promise<void> =>
+	{
+		if (dirty() && !confirm("저장하지 않은 변경 사항을 버리고 이전 작업을 복구할까요?"))
+			return;
+
+		if (!await render(candidate.document, true))
+			return;
+
+		document_name = candidate.name;
+		baseline = "";
+		pending_fields = false;
+		recovery = undefined;
+		recovery_pending = false;
+		element("recovery").hidden = true;
+		schedule_save();
+	})();
+};
+element("discard").onclick = (): void => { void clear_local_record().catch((error: unknown): void => error_text(error)); };
+window.addEventListener("beforeunload", (event: BeforeUnloadEvent): void => { if (dirty()) event.preventDefault(); });
+element("stage").addEventListener
+(
+	"dragover", (event: DragEvent): void => { if (event.dataTransfer?.types.includes("Files")) event.preventDefault(); },
+);
+element("stage").addEventListener
+(
+	"drop", (event: DragEvent): void =>
+	{
+		event.preventDefault();
+		const file: File | undefined = event.dataTransfer?.files[0];
+		if (file)
+			void open_file(file).catch((error: unknown): void => error_text(error));
+	},
+);
 animate();
 document.fonts.ready.then((): void => { plot.draw(); });
 document.addEventListener("keydown", (event: KeyboardEvent): void =>
@@ -916,4 +1287,4 @@ new ResizeObserver((): void =>
 }).observe(element("stage"));
 window.addEventListener("pagehide", (): void => { core.dispose(); plot.dispose(); });
 panel();
-void render(document_value, true);
+void initialize();
