@@ -156,3 +156,7 @@ pre { font: 10px/1.65 Consolas, monospace; color: var(--muted); overflow-wrap: a
 
 #touch_controls { display: none; position: absolute; right: 14px; bottom: 34px; z-index: 4; }
 @media (pointer: coarse) { #touch_controls { display: flex; gap: 6px; align-items: center; } }
+/* 새 버전 안내, 현재 캔버스와 입력 유지 */
+#update-notice { position: absolute; top: 16px; right: 16px; max-width: 360px; padding: 12px;
+	background: var(--panel-bg, Canvas); color: var(--fgv-text, CanvasText); border: 1px solid #64748b; z-index: 30; }
+#update-notice[hidden] { display: none; }

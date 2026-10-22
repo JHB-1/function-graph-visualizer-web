@@ -7,6 +7,7 @@ import { parse_document, parse_recovery, read_recovery, store_recovery, document
 	type DocumentValue, type RecoveryRecord } from "./document";
 import "./style.css";
 import { get_workspace_host, storage_key, type WorkspaceEvent } from "./host";
+import { watch_updates } from "./updates";
 
 const host = get_workspace_host();
 
@@ -116,6 +117,9 @@ let disposed: boolean = false;
 let animation_id: number = 0;
 let external_timer: ReturnType<typeof setTimeout> | undefined;
 let external_document: DocumentValue | undefined;
+let update_reload: boolean = false;
+let update_snapshot: string = "";
+let stop_updates: (() => void) | undefined;
 
 function dirty(): boolean
 {
@@ -255,6 +259,7 @@ async function clear_local_record(all: boolean = false): Promise<void>
 	clearTimeout(save_timer);
 	++save_epoch;
 	await store_recovery(undefined, all);
+	sessionStorage.removeItem("fgv-update-recovery");
 	recovery = undefined;
 	recovery_pending = false;
 	element("recovery").hidden = true;
@@ -1526,7 +1531,7 @@ async function initialize(): Promise<void>
 	{
 		autosave = host?.drafts ? await host.drafts.get_enabled() : sessionStorage.getItem(storage_key("autosave")) !== "false";
 		const stored: unknown = await read_recovery();
-		recovery_pending = autosave && stored !== undefined;
+		recovery_pending = (autosave || sessionStorage.getItem("fgv-update-recovery") === "true") && stored !== undefined;
 		if (recovery_pending)
 		{
 			element("recovery").hidden = false;
@@ -1549,6 +1554,23 @@ async function initialize(): Promise<void>
 	element<HTMLButtonElement>("recover").disabled = !recovery;
 	document_status();
 	await render(document_value, true);
+	if (!host)
+		stop_updates = watch_updates
+		(
+			async (): Promise<void> =>
+			{
+				require_idle();
+				if (pending_fields || recovery_pending)
+					throw new Error("입력 변경을 적용하거나 이전 복구를 선택한 뒤 업데이트하세요.");
+
+				clearTimeout(save_timer);
+				++save_epoch;
+				await store_recovery({ version: 1, name: document_name, document: structuredClone(document_value) });
+				sessionStorage.setItem("fgv-update-recovery", "true");
+				update_reload = true;
+				update_snapshot = JSON.stringify(document_value);
+			},
+		);
 }
 
 element("recover").onclick = (): void =>
@@ -1571,12 +1593,17 @@ element("recover").onclick = (): void =>
 		pending_fields = false;
 		recovery = undefined;
 		recovery_pending = false;
+		sessionStorage.removeItem("fgv-update-recovery");
 		element("recovery").hidden = true;
 		schedule_save();
 	})();
 };
 element("discard").onclick = (): void => { void clear_local_record().catch((error: unknown): void => error_text(error)); };
-window.addEventListener("beforeunload", (event: BeforeUnloadEvent): void => { if (dirty()) event.preventDefault(); });
+window.addEventListener("beforeunload", (event: BeforeUnloadEvent): void =>
+{
+	if (dirty() && (!update_reload || pending_fields || JSON.stringify(document_value) !== update_snapshot))
+		event.preventDefault();
+});
 element("stage").addEventListener
 (
 	"dragover", (event: DragEvent): void => { if (event.dataTransfer?.types.includes("Files")) event.preventDefault(); },
@@ -1658,6 +1685,7 @@ function dispose_workspace(): void
 		return;
 
 	disposed = true;
+	stop_updates?.();
 	++sequence;
 	clearTimeout(save_timer);
 	clearTimeout(sync_timer);
