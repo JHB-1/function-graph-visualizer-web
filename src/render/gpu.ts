@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { z } from "zod";
+import { format_tick_labels } from "./tick_labels";
 
 const point = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
 const color = z.tuple([z.number().int().min(0).max(255), z.number().int().min(0).max(255),
@@ -679,15 +680,25 @@ export class GpuPlot
 		// 축 이름 배치 후 남은 영역에 눈금 배치, 원점 중복도 같은 충돌 검사로 생략
 		if (data.show_axes)
 			for (const [index, axis] of data.axes.entries())
+			{
+				const ticks: Array<{ value: number; screen: THREE.Vector3 }> = [];
 				for (const tick of axis.ticks)
 				{
 					const p: THREE.Vector3 = screen(tick.position);
 					if (Math.abs(p.x) > 1 || Math.abs(p.y) > 1 || Math.abs(p.z) > 1)
 						continue;
 
-					label(Number(tick.value.toPrecision(3)).toString(), x + (p.x + 1) * width / 2 + 3 * scale,
+					ticks.push({ value: tick.value, screen: p });
+				}
+
+				const texts: string[] = format_tick_labels(ticks.map((tick: typeof ticks[number]): number => tick.value));
+				for (const [tick_index, tick] of ticks.entries())
+				{
+					const p: THREE.Vector3 = tick.screen;
+					label(texts[tick_index]!, x + (p.x + 1) * width / 2 + 3 * scale,
 						y + (1 - p.y) * height / 2 + 8 * scale, this.axis_tint(index));
 				}
+			}
 
 		ink.restore();
 	}
