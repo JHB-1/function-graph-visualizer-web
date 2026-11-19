@@ -112,3 +112,22 @@ WorkspaceHost.confirm을 선택적으로 제공할 수 있습니다. MCP sandbox
 호스트 확인 뒤 문서 교체의 유휴 상태를 다시 검사하며 대기 중 도착한 다른 서버 문서를 덮어쓰지 않습니다.
 Windows Chrome의 strict TypeScript/production build와 기존 실제 브라우저 15/15가 통과했습니다.
 
+
+
+## 같은 2D 곡선 구조의 GPU 자원 재사용, 2026-11-20
+
+Web main b8ae4182의 수치 라벨 수정 위에 기존 채택 후보의 곡선 재사용 hunk만 분리했습니다.
+같은 2D 선분 연결과 버퍼 크기에서는 mesh/geometry/material/attribute/array/GL buffer를 유지합니다.
+연결 변경, 투명 선 숨김, 점/곡면 전환에서는 기존 자원을 회수하며 실패 후에도 보존 선은 root 소유입니다.
+코어/Worker/입력 parser/의존성 lock/런타임 pin과 다른 main.ts 변경은 포함하지 않습니다.
+
+원 main lock의 Three0.186.1/Zod4.3.6/TypeScript5.9.3으로 GPU strict 검사가 통과했습니다.
+실제 Chrome157.0.8103.79/WebGL2/SwiftShader/DPR1/CSS900x600의 독립 두 canvas에서12단계의 전체 GPU/label RGBA가 같습니다.
+좌표 수정, 색/alpha/굵기, 불투명 전환, viewport, pan/zoom, 같은 크기의 다른 연결, 투명 선,
+점/곡면 전환과 곡선 복귀에서 기대한 객체/버퍼 identity 유지 또는 교체를 확인했습니다.
+앞8단계의 GL 생성68→60, 관측 geometry/material27→23이며 숨은 전체 할당/지연/RSS 개선으로 확대하지 않습니다.
+연속 흐름2개의4개 renderer 모두 context loss 전에 관측 GL buffer0, pageerror0, 종료 후 소유 브라우저0입니다.
+
+이번 검사는 기존 실제 core 응답을 그대로 재생한 새 GPU 검사입니다.
+새 코어/WASM/Worker 계산이나 전체 작업 공간/SDK/배포 재검증으로 합산하지 않습니다.
+수치 라벨 정책/Scene 원본은 유지했고 외부 의존성 설치/기존 사용자 프로필 변경은 하지 않았습니다.

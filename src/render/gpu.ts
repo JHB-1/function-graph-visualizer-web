@@ -107,6 +107,7 @@ export class GpuPlot
 	private current_level: number = -1;
 	private line_updates: Array<() => void> = [];
 	private surface_bounds: THREE.Box3 = new THREE.Box3();
+	private curve_line: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> | undefined;
 
 	constructor(private readonly canvas: HTMLCanvasElement, labels: HTMLCanvasElement)
 	{
@@ -185,19 +186,31 @@ export class GpuPlot
 		this.draw();
 	}
 
-	private clear(): void
+	private clear(retained_curve?: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>): void
 	{
-		this.root.traverse((object: THREE.Object3D): void =>
-		{
-			if (object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.Points)
+		this.root.traverse
+		(
+			(object: THREE.Object3D): void =>
 			{
-				object.geometry.dispose();
-				const materials: THREE.Material[] = Array.isArray(object.material) ? object.material : [object.material];
-				for (const material of materials)
-					material.dispose();
+				if (object === retained_curve)
+					return;
+
+				if (object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.Points)
+				{
+					object.geometry.dispose();
+					const materials: THREE.Material[] = Array.isArray(object.material) ? object.material : [object.material];
+					for (const material of materials)
+						material.dispose();
+				}
 			}
-		});
+		);
 		this.root.clear();
+
+		// 보존 선도 root 소유 유지, 후속 load 실패 뒤 dispose/reload에서 함께 정리
+		if (retained_curve)
+			this.root.add(retained_curve);
+
+		this.curve_line = retained_curve;
 		this.axis_lines = [];
 		this.surface_geometry = undefined;
 		this.levels = [];
@@ -211,6 +224,7 @@ export class GpuPlot
 		tint: Rgba,
 		width: number,
 		overlay: boolean = false,
+		retained?: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>,
 	): THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> | undefined
 	{
 		if (!positions.length || !tint[3] || !width)
@@ -218,25 +232,60 @@ export class GpuPlot
 
 		// 소프트웨어 GL의 작은 인스턴스 반복 비용 제거, 정점은 선분당 네 개만 사용
 		const count: number = positions.length / 6;
-		const values = new Float32Array(count * 4 * 4);
-		const indices = new Uint32Array(count * 6);
-		for (let i: number = 0; i < count; ++i)
-			indices.set([i*4, i*4+1, i*4+2, i*4+2, i*4+3, i*4], i*6);
+		let object: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> | undefined = retained;
+		if (!object)
+		{
+			const values = new Float32Array(count * 4 * 4);
+			const indices = new Uint32Array(count * 6);
+			for (let i: number = 0; i < count; ++i)
+				indices.set([i*4, i*4+1, i*4+2, i*4+2, i*4+3, i*4], i*6);
 
-		const geometry = new THREE.BufferGeometry();
-		const buffer = new THREE.BufferAttribute(values, 4).setUsage(THREE.DynamicDrawUsage);
-		geometry.setAttribute("clip_position", buffer);
-		geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-		const color: THREE.Color = rgb(tint);
-		// 축은 반투명 격자/곡면 이후 합성, 축 RGBA를 유지하며 깊이 가림 방지
-		const material = new THREE.ShaderMaterial({
-			vertexShader: "attribute vec4 clip_position; void main() { gl_Position = clip_position; }",
-			fragmentShader: `uniform vec4 tint; void main() { gl_FragColor = tint;
+			const geometry = new THREE.BufferGeometry();
+			const buffer = new THREE.BufferAttribute(values, 4).setUsage(THREE.DynamicDrawUsage);
+			geometry.setAttribute("clip_position", buffer);
+			geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+			// 축은 반투명 격자/곡면 이후 합성, 축 RGBA를 유지하며 깊이 가림 방지
+			const material = new THREE.ShaderMaterial
+			(
+				{
+					vertexShader: "attribute vec4 clip_position; void main() { gl_Position = clip_position; }",
+					fragmentShader: `uniform vec4 tint; void main() { gl_FragColor = tint;
 				#include <colorspace_fragment>
-			}`, uniforms: { tint: { value: new THREE.Vector4(color.r, color.g, color.b, tint[3] / 255) },
-				line_width: { value: width * this.pixel_scale } },
-			transparent: overlay || tint[3] < 255, depthWrite: false, depthTest: !overlay, side: THREE.DoubleSide });
-		const object = new THREE.Mesh(geometry, material);
+			}`,
+					uniforms:
+					{
+						tint: { value: new THREE.Vector4() },
+						line_width: { value: 0 },
+					},
+					transparent: overlay || tint[3] < 255,
+					depthWrite: false,
+					depthTest: !overlay,
+					side: THREE.DoubleSide,
+				},
+			);
+			object = new THREE.Mesh(geometry, material);
+		}
+
+		const geometry: THREE.BufferGeometry = object.geometry;
+		const buffer = geometry.getAttribute("clip_position") as THREE.BufferAttribute;
+		const values = buffer.array as Float32Array;
+		const material: THREE.ShaderMaterial = object.material;
+		const color: THREE.Color = rgb(tint);
+		const uniform = material.uniforms.tint!.value as THREE.Vector4;
+		uniform.set(color.r, color.g, color.b, tint[3] / 255);
+		material.uniforms.line_width!.value = width * this.pixel_scale;
+		const is_transparent: boolean = overlay || tint[3] < 255;
+		if (material.transparent !== is_transparent)
+		{
+			material.transparent = is_transparent;
+			material.needsUpdate = true;
+		}
+
+		material.depthWrite = false;
+		material.depthTest = !overlay;
+		material.side = THREE.DoubleSide;
+		geometry.boundingBox = null;
+		geometry.boundingSphere = null;
 		object.renderOrder = overlay ? 10 : 0;
 		object.frustumCulled = false;
 		this.root.add(object);
@@ -318,7 +367,27 @@ export class GpuPlot
 			if (reference >= count)
 				throw new Error("Scene index exceeds vertex count");
 
-		this.clear();
+		const segment_count: number = data.rendering.segment_indices.length;
+		const can_keep_curve: boolean = data.dimension === 2 && !data.triangles.length && !data.cells.length &&
+			!data.rendering.surface && segment_count > 0 && data.style.stroke[3] > 0 && data.style.line_width > 0;
+		const curve: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> | undefined = this.curve_line;
+		const old_segments: SceneData["rendering"]["segment_indices"] | undefined = this.data?.rendering.segment_indices;
+		const curve_buffer: THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined =
+			curve?.geometry.getAttribute("clip_position");
+		const curve_index: THREE.BufferAttribute | null | undefined = curve?.geometry.getIndex();
+		const can_reuse_curve: boolean = can_keep_curve && curve?.material instanceof THREE.ShaderMaterial &&
+			curve_buffer instanceof THREE.BufferAttribute && curve_buffer.itemSize === 4 &&
+			curve_buffer.array instanceof Float32Array && curve_buffer.array.length === segment_count * 16 &&
+			curve_index instanceof THREE.BufferAttribute && curve_index.array instanceof Uint32Array &&
+			curve_index.array.length === segment_count * 6 && old_segments !== undefined &&
+			old_segments.length === segment_count && data.rendering.segment_indices.every
+			(
+				(segment: number[], index: number): boolean =>
+					segment[0] === old_segments[index]![0] && segment[1] === old_segments[index]![1],
+			);
+		const retained_curve: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> | undefined =
+			can_reuse_curve ? curve : undefined;
+		this.clear(retained_curve);
 		this.data = data;
 		this.canvas.dataset.camera = JSON.stringify(state.camera);
 		this.canvas.dataset.view = JSON.stringify(state.view);
@@ -382,7 +451,10 @@ export class GpuPlot
 		for (const [begin, end] of data.rendering.segment_indices)
 			segments.push(...data.vertices[begin]!.position, ...data.vertices[end]!.position);
 
-		this.lines(segments, data.style.stroke, data.style.line_width);
+		// 원 분절 순서의 전체 좌표 전달, 현재 투영 closure는 매번 새로 준비
+		const stroke: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> | undefined =
+			this.lines(segments, data.style.stroke, data.style.line_width, false, retained_curve);
+		this.curve_line = can_keep_curve ? stroke : undefined;
 		if (data.points.length && data.style.points[3] && data.style.point_radius)
 		{
 			const geometry = new THREE.BufferGeometry();
